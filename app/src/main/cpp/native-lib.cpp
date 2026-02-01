@@ -2,7 +2,10 @@
 #include <cmath>
 #include <algorithm>
 
-extern "C" JNIEXPORT jfloat JNICALL
+extern "C" {
+
+// 1. FUNGSI COSINE DISTANCE (Tetap yang lama, sudah joss)
+JNIEXPORT jfloat JNICALL
 Java_com_example_crashcourse_utils_NativeMath_cosineDistance(
     JNIEnv* env, jobject /* this */, jfloatArray a, jfloatArray b) {
     
@@ -33,3 +36,24 @@ Java_com_example_crashcourse_utils_NativeMath_cosineDistance(
     
     return 1.0f - sim;
 }
+
+// 2. FUNGSI PREPROCESS: NORMALISASI (New!)
+// Fungsi ini memproses ribuan pixel sekaligus di level C++
+JNIEXPORT void JNICALL
+Java_com_example_crashcourse_utils_NativeMath_preprocessImage(
+    JNIEnv* env, jobject /* this */, jobject byteBuffer, jint size) {
+    
+    // Mengambil alamat memori langsung dari ByteBuffer Kotlin
+    // Ini sangat cepat karena tidak ada proses copy data
+    float* pixels = (float*)env->GetDirectBufferAddress(byteBuffer);
+    
+    if (pixels == nullptr) return;
+
+    for (int i = 0; i < size; i++) {
+        // Rumus umum FaceNet: (x - 127.5) / 128.0
+        // Mengubah 0..255 menjadi -1.0..1.0
+        pixels[i] = (pixels[i] - 127.5f) / 128.0f;
+    }
+}
+
+} // extern "C"

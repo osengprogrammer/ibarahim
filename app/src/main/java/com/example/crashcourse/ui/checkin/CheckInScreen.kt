@@ -1,6 +1,8 @@
 package com.example.crashcourse.ui
 
 import android.graphics.Rect
+import android.media.AudioManager
+import android.media.ToneGenerator
 import android.speech.tts.TextToSpeech
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
@@ -24,7 +26,10 @@ import com.example.crashcourse.db.FaceCache
 import com.example.crashcourse.scanner.FaceScanner
 import com.example.crashcourse.utils.NativeMath
 import com.example.crashcourse.viewmodel.FaceViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.util.*
+import kotlin.math.abs
 
 @Composable
 fun CheckInScreen(
@@ -47,13 +52,19 @@ fun CheckInScreen(
     var livenessMessage by remember { mutableStateOf("Position face") }
     var lastFaceDetectedTime by remember { mutableLongStateOf(System.currentTimeMillis()) }
 
+    // 🛡️ SECURITY: Identity Lock (Identity + Location)
+    var verifiedEmbedding by remember { mutableStateOf<FloatArray?>(null) }
+    var lastVerifiedBounds by remember { mutableStateOf<Rect?>(null) }
+
     var faceBounds by remember { mutableStateOf<List<Rect>>(emptyList()) }
     var imageSize by remember { mutableStateOf(IntSize.Zero) }
     var imageRotation by remember { mutableStateOf(0) }
 
     val checkInTimestamps = remember { mutableStateMapOf<String, Long>() }
     val lastWaitSpokenTime = remember { mutableStateMapOf<String, Long>() } 
+    
     val tts = remember { mutableStateOf<TextToSpeech?>(null) }
+    val toneGen = remember { ToneGenerator(AudioManager.STREAM_MUSIC, 100) }
 
     LaunchedEffect(Unit) {
         TextToSpeech(context) { status ->
@@ -64,82 +75,108 @@ fun CheckInScreen(
         }.also { tts.value = it }
     }
 
+    fun playSuccessSound() = toneGen.startTone(ToneGenerator.TONE_PROP_ACK, 150)
     fun speak(msg: String) = tts.value?.speak(msg, TextToSpeech.QUEUE_FLUSH, null, null)
 
+    // ✅ OPTIMIZATION: Load 500+ Students in Background Thread
     LaunchedEffect(Unit) {
-        gallery = FaceCache.load(context)
-        loading = false
+        withContext(Dispatchers.IO) {
+            // Heavy DB operation happens here (Background)
+            val loadedGallery = FaceCache.load(context)
+            
+            // UI Update happens here (Main Thread)
+            withContext(Dispatchers.Main) {
+                gallery = loadedGallery
+                loading = false
+            }
+        }
     }
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         if (loading) {
+            // While loading in background, show this spinner
             CircularProgressIndicator(Modifier.align(Alignment.Center))
         } else {
             FaceScanner(useBackCamera = currentCameraIsBack) { result ->
                 val now = System.currentTimeMillis()
+                val currentFace = result.bounds.firstOrNull()
 
-                // 1. INSTANT RESET LOGIC
-                if (result.embeddings.isEmpty()) {
+                // 1. TIMEOUT & RESET
+                if (currentFace == null) {
                     if (matchName != null) { matchName = null }
-                    if (now - lastFaceDetectedTime > 1500) {
+                    if (now - lastFaceDetectedTime > 1200) {
                         livenessState = 0
                         livenessMessage = "Position face"
-                        secondsRemaining = 0
+                        verifiedEmbedding = null
+                        lastVerifiedBounds = null
                     }
                 } else {
                     lastFaceDetectedTime = now 
                 }
                 
-                // 2. LIVENESS
-                val leftEye = result.leftEyeOpenProb ?: -1f
-                val rightEye = result.rightEyeOpenProb ?: -1f
-                val eyesOpen = (leftEye > 0.80f && rightEye > 0.80f)
-                val eyesClosed = (leftEye < 0.15f && rightEye < 0.15f) 
+                // 2. LIVENESS DETECTION
+                val eyesClosed = (result.leftEyeOpenProb ?: 1f) < 0.15f && (result.rightEyeOpenProb ?: 1f) < 0.15f
+                val eyesOpen = (result.leftEyeOpenProb ?: 0f) > 0.80f && (result.rightEyeOpenProb ?: 0f) > 0.80f
 
                 var nextLivenessState = livenessState
                 var nextLivenessMsg = livenessMessage
 
-                if (livenessState != 2 && result.embeddings.isNotEmpty()) {
+                if (livenessState != 2 && currentFace != null && result.embeddings.isNotEmpty()) {
                     if (eyesClosed) {
                         nextLivenessState = 1 
                         nextLivenessMsg = "Blink detected..."
                     } else if (livenessState == 1 && eyesOpen) {
+                        // 🛡️ LOCK IDENTITY
                         nextLivenessState = 2 
                         nextLivenessMsg = "Verified ✅"
+                        verifiedEmbedding = result.embeddings.first().second
+                        lastVerifiedBounds = currentFace
+                        playSuccessSound()
                         speak("Verified")
                     } else if (livenessState == 0) {
                         nextLivenessMsg = "Blink to verify"
                     }
                 }
 
-                // 3. RECOGNITION (NATIVE C++)
+                // 3. RECOGNITION MATH
                 var calculatedBestName: String? = null
                 var shouldGreet = false
                 
-                if (result.embeddings.isNotEmpty() && nextLivenessState == 2) {
-                    val (_, embedding) = result.embeddings.first()
-                    var bestDist = Float.MAX_VALUE
-                    var secondBestDist = Float.MAX_VALUE
-                    var bestName: String? = null
+                if (result.embeddings.isNotEmpty() && nextLivenessState == 2 && verifiedEmbedding != null) {
+                    val (_, currentEmbedding) = result.embeddings.first()
 
-                    for ((name, dbEmbedding) in gallery) {
-                        val dist = NativeMath.cosineDistance(dbEmbedding, embedding)
-                        if (dist < bestDist) {
-                            secondBestDist = bestDist
-                            bestDist = dist
-                            bestName = name
-                        } else if (dist < secondBestDist) {
-                            secondBestDist = dist
+                    // 🛡️ SECURITY CHECK 1: Identity Consistency
+                    val identityMatch = NativeMath.cosineDistance(verifiedEmbedding!!, currentEmbedding)
+                    
+                    if (identityMatch > 0.25f) {
+                        nextLivenessState = 0
+                        nextLivenessMsg = "Identity mismatch! Re-blink"
+                        verifiedEmbedding = null
+                    } else {
+                        // 🛡️ SECURITY CHECK 2: Search Database
+                        var bestDist = Float.MAX_VALUE
+                        var secondBestDist = Float.MAX_VALUE
+                        var bestName: String? = null
+
+                        for ((name, dbEmbedding) in gallery) {
+                            val dist = NativeMath.cosineDistance(dbEmbedding, currentEmbedding)
+                            if (dist < bestDist) {
+                                secondBestDist = bestDist
+                                bestDist = dist
+                                bestName = name
+                            } else if (dist < secondBestDist) {
+                                secondBestDist = dist
+                            }
                         }
-                    }
 
-                    if (bestDist < 0.32f && (secondBestDist - bestDist) > 0.12f) {    
-                        calculatedBestName = bestName
-                        shouldGreet = true
+                        if (bestDist < 0.30f && (secondBestDist - bestDist) > 0.10f) {    
+                            calculatedBestName = bestName
+                            shouldGreet = true
+                        }
                     }
                 }
 
-                // 4. ATOMIC UI UPDATE
+                // 4. UI & DB UPDATE
                 androidx.compose.runtime.snapshots.Snapshot.withMutableSnapshot {
                     faceBounds = result.bounds
                     imageSize = result.imageSize
@@ -160,7 +197,9 @@ fun CheckInScreen(
                             isRegistered = true
                             alreadyCheckedIn = false
                             speak("Welcome $name")
+                            // Reset for next person
                             livenessState = 0 
+                            verifiedEmbedding = null
                         } else {
                             matchName = name
                             alreadyCheckedIn = true
@@ -171,98 +210,45 @@ fun CheckInScreen(
                                 lastWaitSpokenTime[name] = now
                             }
                         }
-                    } else if (livenessState == 2 && calculatedBestName == null) {
+                    } else if (livenessState == 2 && calculatedBestName == null && result.embeddings.isNotEmpty()) {
                         isRegistered = false
                     }
                 }
             }
 
             // --- UI LAYERS ---
-
             if (imageSize != IntSize.Zero) {
                 FaceOverlay(faceBounds, imageSize, imageRotation, !currentCameraIsBack, Modifier.fillMaxSize())
             }
 
-            // 🟢 UNIFIED TOP BAR
+            // TOP BAR UI
             Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 16.dp, start = 12.dp, end = 12.dp)
-                    .align(Alignment.TopCenter),
+                modifier = Modifier.fillMaxWidth().padding(top = 16.dp, start = 12.dp, end = 12.dp).align(Alignment.TopCenter),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(Color.Black.copy(0.5f), RoundedCornerShape(24.dp))
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    modifier = Modifier.fillMaxWidth().background(Color.Black.copy(0.5f), RoundedCornerShape(24.dp)).padding(horizontal = 16.dp, vertical = 8.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Logo
-                    Text(
-                        text = "AZURA",
-                        style = MaterialTheme.typography.labelLarge.copy(
-                            fontWeight = FontWeight.Black, 
-                            letterSpacing = 2.sp,
-                            color = Color.White
-                        )
-                    )
-
-                    // Liveness Status Badge
-                    Text(
-                        text = livenessMessage.uppercase(),
-                        style = MaterialTheme.typography.labelSmall.copy(
-                            fontWeight = FontWeight.Bold,
-                            color = if (livenessState == 2) Color.Green else Color.Yellow
-                        )
-                    )
-
-                    // Camera Toggle Button
-                    IconButton(
-                        onClick = { currentCameraIsBack = !currentCameraIsBack },
-                        modifier = Modifier.size(32.dp)
-                    ) {
+                    Text("AZURA", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Black, letterSpacing = 2.sp, color = Color.White))
+                    Text(livenessMessage.uppercase(), style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, color = if (livenessState == 2) Color.Green else Color.Yellow))
+                    IconButton(onClick = { currentCameraIsBack = !currentCameraIsBack }, modifier = Modifier.size(32.dp)) {
                         Icon(Icons.Default.CameraAlt, "Switch", tint = Color.White, modifier = Modifier.size(20.dp))
                     }
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // 🟢 ANIMATED PILL NOTIFICATION (Success / Cooldown)
                 AnimatedVisibility(
                     visible = matchName != null,
                     enter = slideInVertically(initialOffsetY = { -50 }) + fadeIn(),
                     exit = slideOutVertically(targetOffsetY = { -50 }) + fadeOut()
                 ) {
                     val isWarning = alreadyCheckedIn
-                    Surface(
-                        shape = RoundedCornerShape(20.dp),
-                        color = if (isWarning) Color(0xFFFFC107) else Color(0xFF00BCD4),
-                        shadowElevation = 6.dp
-                    ) {
-                        Text(
-                            text = if (isWarning) "COOLDOWN: ${secondsRemaining}s" else "SUCCESS: $matchName",
-                            modifier = Modifier.padding(horizontal = 24.dp, vertical = 6.dp),
-                            style = MaterialTheme.typography.labelMedium.copy(
-                                fontWeight = FontWeight.ExtraBold,
-                                color = Color.Black
-                            )
-                        )
+                    Surface(shape = RoundedCornerShape(20.dp), color = if (isWarning) Color(0xFFFFC107) else Color(0xFF00BCD4), shadowElevation = 6.dp) {
+                        Text(text = if (isWarning) "COOLDOWN: ${secondsRemaining}s" else "SUCCESS: $matchName", modifier = Modifier.padding(horizontal = 24.dp, vertical = 6.dp), style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.ExtraBold, color = Color.Black))
                     }
-                }
-            }
-
-            // UNREGISTERED ALERT
-            if (!isRegistered && livenessState == 2 && faceBounds.isNotEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(bottom = 120.dp)
-                        .background(Color.Red.copy(0.8f), RoundedCornerShape(8.dp))
-                        .padding(horizontal = 16.dp, vertical = 8.dp)
-                ) {
-                    Text("USER NOT REGISTERED", color = Color.White, style = MaterialTheme.typography.labelSmall)
                 }
             }
         }

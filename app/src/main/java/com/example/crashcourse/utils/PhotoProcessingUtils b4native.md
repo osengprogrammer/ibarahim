@@ -5,8 +5,8 @@ import android.graphics.Bitmap
 import android.graphics.Rect
 import androidx.core.graphics.scale
 import android.util.Log
+import com.example.crashcourse.ml.BitmapUtils
 import com.example.crashcourse.ml.FaceRecognizer
-import com.example.crashcourse.utils.NativeMath // ✅ Import NativeMath
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.face.FaceDetection
 import com.google.mlkit.vision.face.FaceDetectorOptions
@@ -14,8 +14,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 
 object PhotoProcessingUtils {
     private const val TAG = "PhotoProcessingUtils"
@@ -23,6 +21,9 @@ object PhotoProcessingUtils {
 
     /**
      * Process a bitmap to detect faces and generate embeddings
+     * @param context Application context
+     * @param bitmap The bitmap to process
+     * @return Pair of (processed bitmap, embedding) if face detected, null otherwise
      */
     suspend fun processBitmapForFaceEmbedding(
         @Suppress("UNUSED_PARAMETER") context: Context,
@@ -36,7 +37,7 @@ object PhotoProcessingUtils {
                 bitmap
             }
 
-            // Detect faces
+            // Detect faces in the bitmap
             val faces = detectFacesInBitmap(processedBitmap)
 
             if (faces.isEmpty()) {
@@ -44,13 +45,13 @@ object PhotoProcessingUtils {
                 return@withContext null
             }
 
-            // Use the largest face
+            // Use the largest face (most prominent)
             val largestFace = faces.maxByOrNull { it.width() * it.height() }
                 ?: return@withContext null
 
             Log.d(TAG, "Processing face at: $largestFace")
 
-            // Crop and process
+            // Crop and process the face
             val faceBitmap = cropFaceFromBitmap(processedBitmap, largestFace)
             val embedding = generateEmbeddingFromFaceBitmap(faceBitmap)
 
@@ -64,6 +65,11 @@ object PhotoProcessingUtils {
         }
     }
 
+    /**
+     * Detect faces in a bitmap using ML Kit
+     * @param bitmap The bitmap to analyze
+     * @return List of face bounding boxes
+     */
     private suspend fun detectFacesInBitmap(bitmap: Bitmap): List<Rect> =
         suspendCancellableCoroutine { continuation ->
             val image = InputImage.fromBitmap(bitmap, 0)
@@ -87,7 +93,14 @@ object PhotoProcessingUtils {
                 }
         }
 
+    /**
+     * Crop face from bitmap based on bounding box
+     * @param bitmap The original bitmap
+     * @param faceRect The face bounding box
+     * @return Cropped face bitmap
+     */
     private fun cropFaceFromBitmap(bitmap: Bitmap, faceRect: Rect): Bitmap {
+        // Add some padding around the face
         val padding = 0.2f
         val paddingX = (faceRect.width() * padding).toInt()
         val paddingY = (faceRect.height() * padding).toInt()
@@ -103,6 +116,11 @@ object PhotoProcessingUtils {
         return Bitmap.createBitmap(bitmap, left, top, width, height)
     }
 
+    /**
+     * Generate embedding from a face bitmap
+     * @param faceBitmap The cropped face bitmap
+     * @return Face embedding as FloatArray
+     */
     private fun generateEmbeddingFromFaceBitmap(faceBitmap: Bitmap): FloatArray {
         // Resize to model input size
         val resizedBitmap = faceBitmap.scale(INPUT_SIZE, INPUT_SIZE)
@@ -115,36 +133,41 @@ object PhotoProcessingUtils {
     }
 
     /**
-     * 🚀 NATIVE OPTIMIZATION APPLIED HERE
-     * Convert bitmap to ByteBuffer using C++ for normalization
+     * Convert bitmap to ByteBuffer for model input
+     * @param bitmap The bitmap to convert
+     * @return ByteBuffer ready for model inference
      */
-    private fun bitmapToByteBuffer(bitmap: Bitmap): ByteBuffer {
-        // 1. Allocate Direct Buffer
-        val buffer = ByteBuffer.allocateDirect(INPUT_SIZE * INPUT_SIZE * 3 * 4)
-            .order(ByteOrder.nativeOrder())
+    private fun bitmapToByteBuffer(bitmap: Bitmap): java.nio.ByteBuffer {
+        val buffer = java.nio.ByteBuffer.allocateDirect(INPUT_SIZE * INPUT_SIZE * 3 * 4)
+            .order(java.nio.ByteOrder.nativeOrder())
 
         val intVals = IntArray(INPUT_SIZE * INPUT_SIZE)
         bitmap.getPixels(intVals, 0, INPUT_SIZE, 0, 0, INPUT_SIZE, INPUT_SIZE)
 
-        // 2. Put Raw RGB values (0-255) into buffer
-        // We removed the slow Kotlin math division here!
-        for (pixel in intVals) {
-            buffer.putFloat(((pixel shr 16) and 0xFF).toFloat()) // R
-            buffer.putFloat(((pixel shr 8) and 0xFF).toFloat())  // G
-            buffer.putFloat((pixel       and 0xFF).toFloat())    // B
+        var idx = 0
+        for (y in 0 until INPUT_SIZE) {
+            for (x in 0 until INPUT_SIZE) {
+                val pixel = intVals[idx++]
+                // Normalize to [-1, 1] range
+                buffer.putFloat(((pixel shr 16 and 0xFF) - 127.5f) / 128f) // R
+                buffer.putFloat(((pixel shr 8  and 0xFF) - 127.5f) / 128f) // G
+                buffer.putFloat(((pixel       and 0xFF) - 127.5f) / 128f) // B
+            }
         }
-
-        // 3. 🚀 Call Native C++ to handle the math
         buffer.rewind()
-        NativeMath.preprocessImage(buffer, INPUT_SIZE * INPUT_SIZE * 3)
-        
         return buffer
     }
 
+    /**
+     * Validate if a bitmap contains a clear face
+     * @param bitmap The bitmap to validate
+     * @return true if contains a clear face, false otherwise
+     */
     suspend fun validateFaceInBitmap(bitmap: Bitmap): Boolean = withContext(Dispatchers.IO) {
         try {
             val faces = detectFacesInBitmap(bitmap)
             val hasValidFace = faces.isNotEmpty() && faces.any { face ->
+                // Check if face is large enough (at least 50x50 pixels)
                 face.width() >= 50 && face.height() >= 50
             }
             Log.d(TAG, "Face validation result: $hasValidFace (${faces.size} faces detected)")
@@ -155,6 +178,11 @@ object PhotoProcessingUtils {
         }
     }
 
+    /**
+     * Get face confidence score (0.0 to 1.0)
+     * @param bitmap The bitmap to analyze
+     * @return Confidence score, or 0.0 if no face detected
+     */
     suspend fun getFaceConfidence(bitmap: Bitmap): Float = withContext(Dispatchers.IO) {
         try {
             val faces = detectFacesInBitmap(bitmap)
@@ -163,10 +191,12 @@ object PhotoProcessingUtils {
             val largestFace = faces.maxByOrNull { it.width() * it.height() }
                 ?: return@withContext 0.0f
 
+            // Calculate confidence based on face size relative to image
             val faceArea = largestFace.width() * largestFace.height()
             val imageArea = bitmap.width * bitmap.height
             val sizeRatio = faceArea.toFloat() / imageArea.toFloat()
 
+            // Confidence increases with face size, capped at 1.0
             (sizeRatio * 10).coerceAtMost(1.0f)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to calculate face confidence", e)

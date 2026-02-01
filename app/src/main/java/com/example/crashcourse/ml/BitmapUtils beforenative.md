@@ -3,7 +3,6 @@ package com.example.crashcourse.ml
 import android.graphics.*
 import android.media.Image
 import androidx.core.graphics.scale
-import com.example.crashcourse.utils.NativeMath
 import java.io.ByteArrayOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -13,10 +12,7 @@ object BitmapUtils {
     private const val BYTES_PER_CHANNEL = 4
 
     fun preprocessFace(image: Image, boundingBox: Rect, rotation: Int): ByteBuffer {
-        // 1. Convert YUV Camera Frame to Bitmap
         val bitmap = yuvToRgb(image)
-        
-        // 2. Rotate and Crop
         val matrix = Matrix().apply { postRotate(rotation.toFloat()) }
         val rotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
 
@@ -31,39 +27,21 @@ object BitmapUtils {
             rotated.scale(INPUT_SIZE, INPUT_SIZE)
         }
 
-        // 3. Resize to Model Input Size (160x160)
         val inputBmp = faceBmp.scale(INPUT_SIZE, INPUT_SIZE)
 
-        // 4. Allocate Direct Buffer (Crucial for C++ Access)
         val buffer = ByteBuffer.allocateDirect(INPUT_SIZE * INPUT_SIZE * 3 * BYTES_PER_CHANNEL)
             .order(ByteOrder.nativeOrder())
-            
         val intVals = IntArray(INPUT_SIZE * INPUT_SIZE)
         inputBmp.getPixels(intVals, 0, INPUT_SIZE, 0, 0, INPUT_SIZE, INPUT_SIZE)
 
-        // ====================================================================
-        // 🚀 NATIVE OPTIMIZATION START
-        // ====================================================================
-        
-        // Step A: Masukkan data mentah (0-255) ke buffer tanpa matematika
         for (pixel in intVals) {
-            // Extract RGB channels directly
-            buffer.putFloat(((pixel shr 16) and 0xFF).toFloat()) // R
-            buffer.putFloat(((pixel shr 8) and 0xFF).toFloat())  // G
-            buffer.putFloat((pixel       and 0xFF).toFloat())    // B
+            val r = (pixel shr 16) and 0xFF
+            val g = (pixel shr 8) and 0xFF
+            val b = pixel and 0xFF
+            buffer.putFloat((r - 127.5f) / 128.0f)
+            buffer.putFloat((g - 127.5f) / 128.0f)
+            buffer.putFloat((b - 127.5f) / 128.0f)
         }
-        
-        // Step B: Kembalikan posisi buffer ke awal
-        buffer.rewind()
-
-        // Step C: Panggil C++ untuk menghitung normalisasi (x - 127.5)/128.0
-        // Ini jauh lebih cepat daripada loop di Kotlin
-        NativeMath.preprocessImage(buffer, INPUT_SIZE * INPUT_SIZE * 3)
-        
-        // ====================================================================
-        // 🚀 NATIVE OPTIMIZATION END
-        // ====================================================================
-
         return buffer
     }
 
