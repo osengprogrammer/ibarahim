@@ -5,12 +5,22 @@ import androidx.room.PrimaryKey
 
 @Entity(tableName = "faces")
 data class FaceEntity(
-    @PrimaryKey val studentId: String, // Use student ID as unique key
+    // We add a numeric ID to serve as 'faceId' in check-in records
+    @PrimaryKey(autoGenerate = true) val id: Int = 0, 
+    val studentId: String, 
     val name: String,
-    val photoUrl: String? = null, // Optional, if you want to store image URL
+    val photoUrl: String? = null,
     val embedding: FloatArray,
 
-    // These link to dropdowns
+    // 🆕 Numeric IDs (Required for your CheckInRecord logic)
+    val classId: Int? = null,
+    val subClassId: Int? = null,
+    val gradeId: Int? = null,
+    val subGradeId: Int? = null,
+    val programId: Int? = null,
+    val roleId: Int? = null,
+
+    // Display Strings
     val className: String = "",
     val subClass: String = "",
     val grade: String = "",
@@ -24,31 +34,21 @@ data class FaceEntity(
         if (this === other) return true
         if (other !is FaceEntity) return false
 
-        return studentId == other.studentId &&
+        return id == other.id &&
+                studentId == other.studentId &&
                 name == other.name &&
-                photoUrl == other.photoUrl &&
                 embedding.contentEquals(other.embedding) &&
-                className == other.className &&
-                subClass == other.subClass &&
-                grade == other.grade &&
-                subGrade == other.subGrade &&
-                program == other.program &&
-                role == other.role &&
-                timestamp == other.timestamp
+                classId == other.classId &&
+                roleId == other.roleId
     }
 
     override fun hashCode(): Int {
-        var result = studentId.hashCode()
+        var result = id
+        result = 31 * result + studentId.hashCode()
         result = 31 * result + name.hashCode()
-        result = 31 * result + (photoUrl?.hashCode() ?: 0)
         result = 31 * result + embedding.contentHashCode()
-        result = 31 * result + className.hashCode()
-        result = 31 * result + subClass.hashCode()
-        result = 31 * result + grade.hashCode()
-        result = 31 * result + subGrade.hashCode()
-        result = 31 * result + program.hashCode()
-        result = 31 * result + role.hashCode()
-        result = 31 * result + timestamp.hashCode()
+        result = 31 * result + (classId ?: 0)
+        result = 31 * result + (roleId ?: 0)
         return result
     }
 }

@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Security
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -40,7 +41,6 @@ fun CheckInScreen(
     var matchName by remember { mutableStateOf<String?>(null) }
     var isRegistered by remember { mutableStateOf(true) }
     var alreadyCheckedIn by remember { mutableStateOf(false) }
-    var secondsRemaining by remember { mutableIntStateOf(0) }
     
     // 🛡️ PHASE-3: LIVENESS STATE MACHINE
     var livenessState by remember { mutableStateOf(0) } 
@@ -53,7 +53,6 @@ fun CheckInScreen(
     var imageRotation by remember { mutableStateOf(0) }
 
     val checkInTimestamps = remember { mutableStateMapOf<String, Long>() }
-    val lastWaitSpokenTime = remember { mutableStateMapOf<String, Long>() } // 🔊 Voice Cooldown
     val tts = remember { mutableStateOf<TextToSpeech?>(null) }
 
     LaunchedEffect(Unit) {
@@ -81,33 +80,32 @@ fun CheckInScreen(
             FaceScanner(useBackCamera = currentCameraIsBack) { result ->
                 val now = System.currentTimeMillis()
 
-                // 1. TIMEOUT LOGIC: If no face seen for 2 seconds, reset liveness
+                // 1. TIMEOUT LOGIC: If no face seen for 2 seconds, reset everything
                 if (result.embeddings.isEmpty()) {
                     if (now - lastFaceDetectedTime > 2000) {
                         livenessState = 0
                         livenessMessage = "Position your face"
                         matchName = null
-                        secondsRemaining = 0
                     }
                 } else {
-                    lastFaceDetectedTime = now 
+                    lastFaceDetectedTime = now // Face found, update timer
                 }
                 
                 // 2. LIVENESS SENSOR DATA
                 val leftEye = result.leftEyeOpenProb ?: -1f
                 val rightEye = result.rightEyeOpenProb ?: -1f
                 val eyesOpen = (leftEye > 0.80f && rightEye > 0.80f)
-                val eyesClosed = (leftEye < 0.15f && rightEye < 0.15f) 
+                val eyesClosed = (leftEye < 0.15f && rightEye < 0.15f) // Blink Threshold
 
                 var nextLivenessState = livenessState
                 var nextLivenessMsg = livenessMessage
 
                 if (livenessState != 2 && result.embeddings.isNotEmpty()) {
                     if (eyesClosed) {
-                        nextLivenessState = 1 
+                        nextLivenessState = 1 // Blink Detected
                         nextLivenessMsg = "Blink Detected..."
                     } else if (livenessState == 1 && eyesOpen) {
-                        nextLivenessState = 2 
+                        nextLivenessState = 2 // Verified
                         nextLivenessMsg = "Liveness Verified! ✅"
                         speak("Verified")
                     } else if (livenessState == 0) {
@@ -115,7 +113,7 @@ fun CheckInScreen(
                     }
                 }
 
-                // 3. RECOGNITION MATH
+                // 3. RECOGNITION (Only if Verified)
                 var calculatedBestName: String? = null
                 var calculatedBestDist = 1.0f
                 var shouldGreet = false
@@ -144,7 +142,7 @@ fun CheckInScreen(
                     }
                 }
 
-                // 4. ATOMIC UI & DATABASE UPDATE
+                // 4. UI UPDATE
                 androidx.compose.runtime.snapshots.Snapshot.withMutableSnapshot {
                     faceBounds = result.bounds
                     imageSize = result.imageSize
@@ -156,40 +154,19 @@ fun CheckInScreen(
                     if (shouldGreet && calculatedBestName != null) {
                         val name = calculatedBestName!!
                         val lastCheckIn = checkInTimestamps[name] ?: 0L
-                        val diff = now - lastCheckIn
-                        val COOLDOWN_MS = 20_000L // 🟢 20 Seconds
 
-                        if (diff > COOLDOWN_MS) {
-                            // --- SUCCESSFUL CHECK-IN ---
+                        if (now - lastCheckIn > 60_000) {
                             checkInTimestamps[name] = now
-                            viewModel.saveCheckIn(name) 
-                            
                             matchName = name
                             isRegistered = true
                             alreadyCheckedIn = false
-                            secondsRemaining = 0
-                            
-                            val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
-                            val greeting = when (hour) {
-                                in 5..11 -> "Good morning"
-                                in 12..17 -> "Good afternoon"
-                                else -> "Good evening"
-                            }
-                            speak("Welcome $name. $greeting")
-                            livenessState = 0 
+                            speak("Welcome $name")
+                            // Auto-reset state for the next scan after success
+                            livenessState = 0
                         } else {
-                            // --- COOLDOWN PERIOD ---
                             matchName = name
                             isRegistered = true
                             alreadyCheckedIn = true
-                            secondsRemaining = ((COOLDOWN_MS - diff) / 1000).toInt().coerceAtLeast(0)
-
-                            // 🔊 Voice Logic: Only speak "Please wait" every 10 seconds
-                            val lastSpoken = lastWaitSpokenTime[name] ?: 0L
-                            if (now - lastSpoken > 10_000) {
-                                speak("Please wait")
-                                lastWaitSpokenTime[name] = now
-                            }
                         }
                     } else if (livenessState == 2 && calculatedBestName == null) {
                         isRegistered = false
@@ -199,11 +176,12 @@ fun CheckInScreen(
 
             // --- UI LAYERS ---
 
+            // 1. Camera Preview & Overlays
             if (imageSize != IntSize.Zero) {
                 FaceOverlay(faceBounds, imageSize, imageRotation, !currentCameraIsBack, Modifier.fillMaxSize())
             }
 
-            // HEADER: Azura & Camera Switch
+            // 2. HEADER: Azura & Camera Switch (Restored)
             Row(
                 modifier = Modifier.fillMaxWidth().padding(16.dp).align(Alignment.TopCenter),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -225,7 +203,7 @@ fun CheckInScreen(
                 }
             }
 
-            // STATUS MESSAGE (Blink status)
+            // 3. LIVENESS MESSAGE (Below Header)
             Text(
                 text = livenessMessage,
                 modifier = Modifier.align(Alignment.TopCenter).padding(top = 90.dp)
@@ -235,30 +213,23 @@ fun CheckInScreen(
                 fontWeight = FontWeight.Bold
             )
 
-            // SUCCESS / TIMER OVERLAY
+            // 4. CHECK-IN SUCCESS MESSAGE (Center)
             matchName?.let { name ->
                 Column(
-                    modifier = Modifier.align(Alignment.Center).padding(top = 100.dp),
+                    modifier = Modifier.align(Alignment.Center).padding(top = 80.dp),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    val message = if (alreadyCheckedIn) {
-                        "Already Recorded\nWait ${secondsRemaining}s"
-                    } else {
-                        "Welcome $name"
-                    }
-
                     Text(
-                        text = message,
+                        text = if (alreadyCheckedIn) "$name Already Checkin" else "Welcome $name",
                         style = MaterialTheme.typography.headlineMedium.copy(
-                            color = if (alreadyCheckedIn) Color.Yellow else Color.Cyan, 
-                            fontWeight = FontWeight.Bold
+                            color = Color.Cyan, fontWeight = FontWeight.Bold
                         ),
                         modifier = Modifier.background(Color.Black.copy(0.8f), CircleShape).padding(24.dp)
                     )
                 }
             }
 
-            // UNREGISTERED ALERT
+            // 5. UNREGISTERED ALERT
             if (!isRegistered && livenessState == 2 && faceBounds.isNotEmpty()) {
                 Text(
                     text = "Not Registered",

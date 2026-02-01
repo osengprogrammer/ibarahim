@@ -9,31 +9,35 @@ import androidx.navigation.NavController
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.compose.composable
 import com.example.crashcourse.ui.OptionsManagementScreen
+import com.example.crashcourse.ui.OptionFormScreen
+import com.example.crashcourse.ui.CheckInRecordScreen
 
 sealed class Screen(val route: String) {
-    object CheckIn  : Screen("check_in")
-    object RegistrationMenu : Screen("registration_menu")
-    object AddUser : Screen("add_user")
-    object BulkRegister : Screen("bulk_register") // Bulk registration screen
-    object FaceManualCapture : Screen("face_manual_capture")  // ✅ New manual capture screen
-    object ManualRegistration : Screen("manual_registration")  // ✅ New manual registration screen
-    object Manage   : Screen("manage_faces")
+    object CheckIn           : Screen("check_in")
+    object RegistrationMenu  : Screen("registration_menu")
+    object AddUser           : Screen("add_user")
+    object BulkRegister      : Screen("bulk_register")
+    object FaceManualCapture : Screen("face_manual_capture")
+    object ManualRegistration: Screen("manual_registration")
+    object Manage            : Screen("manage_faces")
     object EditUser : Screen("edit_user/{studentId}") {
         fun createRoute(studentId: String) = "edit_user/$studentId"
     }
-    object Options  : Screen("options_management")
+    object Options           : Screen("options_management")
     object OptionForm : Screen("option_form/{type}") {
         fun createRoute(type: String) = "option_form/$type"
     }
-    object CheckInRecord : Screen("checkin_record")
-    object Debug : Screen("debug")
-    // TestFaceImage removed
+    // Consistent naming for the record history
+    object CheckInRecord     : Screen("checkin_record")
+    object Debug             : Screen("debug")
 }
 
 /**
- * Extension function to add the options management screen to the navigation graph
+ * Extension function to add specialized management screens to the navigation graph.
+ * This keeps your NavHost in MainScreen clean.
  */
-fun NavGraphBuilder.addOptionsManagementScreen(navController: NavController) {
+fun NavGraphBuilder.addAppManagementGraph(navController: NavController) {
+    // Options Management
     composable(Screen.Options.route) {
         OptionsManagementScreen(
             onNavigateToForm = { type ->
@@ -41,19 +45,24 @@ fun NavGraphBuilder.addOptionsManagementScreen(navController: NavController) {
             }
         )
     }
-    // Add composable for OptionFormScreen with type argument
+
+    // Dynamic Option Forms (Class, Grade, Role, etc.)
     composable(Screen.OptionForm.route) { backStackEntry ->
         val type = backStackEntry.arguments?.getString("type") ?: ""
-        com.example.crashcourse.ui.OptionFormScreen(
+        OptionFormScreen(
             type = type,
             onNavigateBack = { navController.popBackStack() }
         )
     }
+
+    // Check-In History Records
+    composable(Screen.CheckInRecord.route) {
+        CheckInRecordScreen()
+    }
 }
 
-
 /**
- * Composable function for the options management navigation button
+ * Helper button to navigate to options from other screens
  */
 @Composable
 fun OptionsManagementButton(navController: NavController) {
@@ -61,8 +70,6 @@ fun OptionsManagementButton(navController: NavController) {
         onClick = { navController.navigate(Screen.Options.route) },
         modifier = Modifier.fillMaxWidth()
     ) {
-        Text("Manage Options")
+        Text("Manage Settings & Options")
     }
 }
-
-// TestFaceImage navigation and button removed

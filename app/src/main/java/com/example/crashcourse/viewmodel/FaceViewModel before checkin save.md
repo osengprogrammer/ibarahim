@@ -15,12 +15,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.time.LocalDateTime
 
 class FaceViewModel(application: Application) : AndroidViewModel(application) {
     private val database = AppDatabase.getInstance(application)
     private val faceDao = database.faceDao()
-    private val checkInRecordDao = database.checkInRecordDao()
     private val classOptionDao = database.classOptionDao()
     private val subClassOptionDao = database.subClassOptionDao()
     private val gradeOptionDao = database.gradeOptionDao()
@@ -33,44 +31,8 @@ class FaceViewModel(application: Application) : AndroidViewModel(application) {
         private const val DUPLICATE_DISTANCE_THRESHOLD = 0.3f
         
         // ✅ FIX: Relaxed from 0.25 to 0.40
+        // This allows Max (0.25~0.35) to pass comfortably while still blocking strangers (0.45+)
         const val RECOGNITION_DISTANCE_THRESHOLD = 0.40f
-    }
-
-    /**
-     * 🚀 NEW: Records a check-in event in the database.
-     * Called by CheckInScreen after successful Blink + Recognition.
-     */
-    fun saveCheckIn(name: String) {
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                // 1. Fetch the full face data to get department/role IDs
-                val face = faceDao.getFaceByName(name) ?: run {
-                    Log.e("ATTENDANCE", "Could not find face record for $name")
-                    return@launch
-                }
-
-                // 2. Build the CheckInRecord using current timestamp
-                val record = CheckInRecord(
-                    name = face.name,
-                    timestamp = LocalDateTime.now(), // Handled by your Converters
-                    faceId = face.id,
-                    classId = face.classId,
-                    subClassId = face.subClassId,
-                    gradeId = face.gradeId,
-                    subGradeId = face.subGradeId,
-                    programId = face.programId,
-                    roleId = face.roleId,
-                    className = face.className,
-                    gradeName = face.grade
-                )
-
-                // 3. Insert into DB
-                checkInRecordDao.insert(record)
-                Log.d("ATTENDANCE", "Successfully recorded check-in for: ${face.name}")
-            } catch (e: Exception) {
-                Log.e("ATTENDANCE", "Error saving check-in: ${e.message}")
-            }
-        }
     }
 
     /** Exposes a StateFlow of all FaceEntity in the DB */
@@ -95,6 +57,7 @@ class FaceViewModel(application: Application) : AndroidViewModel(application) {
         roleOptionDao.getAllOptions()
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    // Functions to get dependent dropdown options
     fun getSubClassOptions(parentClassId: Int): Flow<List<SubClassOption>> {
         return subClassOptionDao.getOptionsForClass(parentClassId)
     }
@@ -106,7 +69,9 @@ class FaceViewModel(application: Application) : AndroidViewModel(application) {
     /** Populates initial dropdown options if they don't exist */
     fun populateInitialOptions() {
         viewModelScope.launch(Dispatchers.IO) {
+            // Only add if no options exist
             if (classOptionDao.getAllOptions().stateIn(viewModelScope, SharingStarted.WhileSubscribed(100), emptyList()).value.isEmpty()) {
+                // Add sample class options
                 val classOptions = listOf(
                     ClassOption(id = 1, name = "Class A", displayOrder = 1),
                     ClassOption(id = 2, name = "Class B", displayOrder = 2),
@@ -114,6 +79,7 @@ class FaceViewModel(application: Application) : AndroidViewModel(application) {
                 )
                 classOptionDao.insertAll(classOptions)
 
+                // Add sample subclass options
                 val subClassOptions = listOf(
                     SubClassOption(id = 1, name = "Subclass A1", parentClassId = 1, displayOrder = 1),
                     SubClassOption(id = 2, name = "Subclass A2", parentClassId = 1, displayOrder = 2),
@@ -122,6 +88,7 @@ class FaceViewModel(application: Application) : AndroidViewModel(application) {
                 )
                 subClassOptionDao.insertAll(subClassOptions)
 
+                // Add sample grade options
                 val gradeOptions = listOf(
                     GradeOption(id = 1, name = "Grade 1", displayOrder = 1),
                     GradeOption(id = 2, name = "Grade 2", displayOrder = 2),
@@ -129,6 +96,7 @@ class FaceViewModel(application: Application) : AndroidViewModel(application) {
                 )
                 gradeOptionDao.insertAll(gradeOptions)
 
+                // Add sample subgrade options
                 val subGradeOptions = listOf(
                     SubGradeOption(id = 1, name = "Section A", parentGradeId = 1, displayOrder = 1),
                     SubGradeOption(id = 2, name = "Section B", parentGradeId = 1, displayOrder = 2),
@@ -136,6 +104,7 @@ class FaceViewModel(application: Application) : AndroidViewModel(application) {
                 )
                 subGradeOptionDao.insertAll(subGradeOptions)
 
+                // Add sample program options
                 val programOptions = listOf(
                     ProgramOption(id = 1, name = "Regular", displayOrder = 1),
                     ProgramOption(id = 2, name = "Special", displayOrder = 2),
@@ -143,6 +112,7 @@ class FaceViewModel(application: Application) : AndroidViewModel(application) {
                 )
                 programOptionDao.insertAll(programOptions)
 
+                // Add sample role options
                 val roleOptions = listOf(
                     RoleOption(id = 1, name = "Student", displayOrder = 1),
                     RoleOption(id = 2, name = "Teacher", displayOrder = 2),
@@ -154,6 +124,11 @@ class FaceViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Registers a new face with student information, blocking duplicates.
+     * onSuccess(): called if insert completes
+     * onDuplicate(existingName): called if a similar face was found
+     */
     fun registerFace(
         studentId: String,
         name: String,
@@ -169,40 +144,59 @@ class FaceViewModel(application: Application) : AndroidViewModel(application) {
         onDuplicate: (existingName: String) -> Unit
     ) {
         viewModelScope.launch(Dispatchers.IO) {
+            // =========================================================================
+            // CRITICAL FIX: Clone the embedding array.
+            // C++ often reuses the same memory buffer for every frame. 
+            // If we don't clone it, previous faces in the cache/DB will point 
+            // to this same changing buffer, causing "ghost" duplicates.
+            // =========================================================================
             val embeddingCopy = embedding.clone()
 
+            Log.d("FaceViewModel", "Registering face: $name ($studentId)")
+            Log.d("FaceViewModel", "Embedding size: ${embeddingCopy.size}")
+
+            // Check if student ID already exists
             val existingFace = faceDao.getFaceByStudentId(studentId)
             if (existingFace != null) {
+                Log.d("FaceViewModel", "Student ID already exists: $studentId")
                 withContext(Dispatchers.Main) {
                     onDuplicate(existingFace.name)
                 }
                 return@launch
             }
 
+            // Check for duplicate face using embedding
             val cached = FaceCache.load(getApplication())
+            Log.d("FaceViewModel", "Loaded ${cached.size} faces from cache for duplicate check")
+            
             var bestName: String? = null
             var bestDist = Float.MAX_VALUE
             
             for ((existingName, existingEmb) in cached) {
+                // Compare using the COPY
                 val dist = cosineDistance(existingEmb, embeddingCopy)
+                Log.d("FaceViewModel", "Distance to $existingName: $dist")
                 if (dist < bestDist) {
                     bestDist = dist
                     bestName = existingName
                 }
             }
+            Log.d("FaceViewModel", "Best match: $bestName, distance: $bestDist, threshold: $DUPLICATE_DISTANCE_THRESHOLD")
 
             if (bestName != null && bestDist <= DUPLICATE_DISTANCE_THRESHOLD) {
+                Log.d("FaceViewModel", "Duplicate face detected: $bestName")
                 withContext(Dispatchers.Main) {
                     onDuplicate(bestName)
                 }
                 return@launch
             }
 
+            // Insert new face
             val face = FaceEntity(
                 studentId = studentId,
                 name = name,
                 photoUrl = photoUrl,
-                embedding = embeddingCopy,
+                embedding = embeddingCopy, // Store the SAFE COPY
                 className = className,
                 subClass = subClass,
                 grade = grade,
@@ -211,7 +205,9 @@ class FaceViewModel(application: Application) : AndroidViewModel(application) {
                 role = role,
                 timestamp = System.currentTimeMillis()
             )
+            Log.d("FaceViewModel", "Inserting face into database: $name")
             faceDao.insert(face)
+            Log.d("FaceViewModel", "Face inserted successfully, refreshing cache")
             FaceCache.refresh(getApplication())
             withContext(Dispatchers.Main) {
                 onSuccess()
@@ -219,6 +215,7 @@ class FaceViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** Deletes a face record */
     fun deleteFace(face: FaceEntity) {
         viewModelScope.launch(Dispatchers.IO) {
             faceDao.delete(face)
@@ -226,6 +223,7 @@ class FaceViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** Edits a face record */
     fun updateFace(face: FaceEntity, onComplete: () -> Unit) {
         viewModelScope.launch(Dispatchers.IO) {
             faceDao.update(face)
@@ -236,6 +234,7 @@ class FaceViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** Updates a face record with new photo */
     fun updateFaceWithPhoto(
         face: FaceEntity,
         photoBitmap: Bitmap?,
@@ -245,17 +244,22 @@ class FaceViewModel(application: Application) : AndroidViewModel(application) {
     ) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
+                // Fix: Clone the embedding here as well for safety
                 val embeddingCopy = embedding.clone()
+
+                // Save the new photo if provided
                 val photoUrl = if (photoBitmap != null) {
                     PhotoStorageUtils.saveFacePhoto(getApplication(), photoBitmap, face.studentId)
                 } else {
-                    face.photoUrl
+                    face.photoUrl // Keep existing photo URL
                 }
 
+                // Clean up old photos if we have a new one
                 if (photoUrl != null && photoUrl != face.photoUrl) {
                     PhotoStorageUtils.cleanupOldPhotos(getApplication(), face.studentId, photoUrl)
                 }
 
+                // Update the face entity with the COPIED embedding
                 val updatedFace = face.copy(
                     photoUrl = photoUrl,
                     embedding = embeddingCopy
@@ -275,12 +279,17 @@ class FaceViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Simplified version of registerFace that maintains backward compatibility
+     * with the existing UI
+     */
     fun registerFace(
         name: String,
         embedding: FloatArray,
         onSuccess: () -> Unit,
         onDuplicate: (existingName: String) -> Unit
     ) {
+        // Generate a random student ID for backward compatibility
         val studentId = "STU" + System.currentTimeMillis().toString()
         registerFace(
             studentId = studentId,

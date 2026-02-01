@@ -39,4 +39,7 @@ interface FaceDao {
 
     @Query("SELECT * FROM faces WHERE role = :role")
     fun getFacesByRole(role: String): Flow<List<FaceEntity>>
+
+    @Query("SELECT * FROM faces WHERE name = :name LIMIT 1")
+    suspend fun getFaceByName(name: String): FaceEntity?
 }

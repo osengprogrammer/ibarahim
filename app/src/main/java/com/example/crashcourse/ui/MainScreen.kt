@@ -7,14 +7,10 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.Science
-import androidx.compose.material.icons.filled.Upload
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
@@ -40,7 +36,7 @@ fun MainScreen() {
     ) { paddingValues ->
         NavHost(
             navController = navController,
-            startDestination = Screen.RegistrationMenu.route, // Set RegistrationMenu as the start destination
+            startDestination = Screen.RegistrationMenu.route,
             modifier = Modifier.padding(paddingValues)
         ) {
             composable(Screen.CheckIn.route) {
@@ -48,7 +44,6 @@ fun MainScreen() {
             }
             composable(Screen.RegistrationMenu.route) {
                 RegistrationMenuScreen(
-                    // onNavigateToBulkRegister removed as per request
                     onNavigateToBulkRegister = {
                         navController.navigate(Screen.BulkRegister.route)
                     },
@@ -57,7 +52,6 @@ fun MainScreen() {
                     }
                 )
             }
-            // Register route removed: RegisterFaceScreen was deprecated/removed
             composable(Screen.AddUser.route) {
                 AddUserScreen(
                     onNavigateBack = { navController.popBackStack() },
@@ -69,10 +63,6 @@ fun MainScreen() {
                 BulkRegistrationScreen(
                     faceViewModel = sharedFaceViewModel
                 )
-            }
-            composable(Screen.ManualRegistration.route) {
-                // ManualRegistrationScreen has been removed as it is no longer needed
-                Text("Manual Registration is currently unavailable.")
             }
             composable(Screen.Manage.route) {
                 FaceListScreen(
@@ -123,12 +113,15 @@ fun MainScreen() {
 
 @Composable
 fun BottomNav(navController: NavHostController) {
+    // 🆕 Updated items list to include Records (History)
     val items = listOf(
         Screen.CheckIn  to "Check In",
         Screen.RegistrationMenu to "Register",
         Screen.Manage   to "Manage",
+        Screen.CheckInRecord to "Records", // Added Check-In Record to Bottom Bar
         Screen.Options  to "Options"
     )
+    
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
 
@@ -150,12 +143,10 @@ fun BottomNav(navController: NavHostController) {
                         imageVector = when (screen) {
                             Screen.CheckIn  -> Icons.Default.Person
                             Screen.RegistrationMenu -> Icons.Default.PersonAdd
-                            // Screen.Register removed
                             Screen.Manage   -> Icons.AutoMirrored.Filled.List
+                            Screen.CheckInRecord -> Icons.Default.History // Using History icon
                             Screen.Options  -> Icons.Default.Settings
-                            Screen.CheckInRecord -> Icons.Default.History
                             Screen.Debug -> Icons.Default.BugReport
-                            // TestFaceImage removed
                             else -> Icons.Default.Person
                         },
                         contentDescription = label
