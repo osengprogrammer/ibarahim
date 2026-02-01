@@ -16,7 +16,8 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.LocalDateTime
-
+// Add this at the top with your other imports
+import com.example.crashcourse.utils.NativeMath
 class FaceViewModel(application: Application) : AndroidViewModel(application) {
     private val database = AppDatabase.getInstance(application)
     private val faceDao = database.faceDao()
@@ -184,7 +185,8 @@ class FaceViewModel(application: Application) : AndroidViewModel(application) {
             var bestDist = Float.MAX_VALUE
             
             for ((existingName, existingEmb) in cached) {
-                val dist = cosineDistance(existingEmb, embeddingCopy)
+                val dist = NativeMath.cosineDistance(existingEmb, embeddingCopy)
+                // val dist = cosineDistance(existingEmb, embeddingCopy)
                 if (dist < bestDist) {
                     bestDist = dist
                     bestName = existingName

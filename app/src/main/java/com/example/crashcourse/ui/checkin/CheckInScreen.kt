@@ -1,13 +1,12 @@
 package com.example.crashcourse.ui
 
-import android.content.Context
 import android.graphics.Rect
-import android.media.AudioManager
 import android.speech.tts.TextToSpeech
-import android.util.Log
+import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material3.*
@@ -19,10 +18,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.crashcourse.db.FaceCache
 import com.example.crashcourse.scanner.FaceScanner
-import com.example.crashcourse.utils.cosineDistance
+import com.example.crashcourse.utils.NativeMath
 import com.example.crashcourse.viewmodel.FaceViewModel
 import java.util.*
 
@@ -42,58 +42,55 @@ fun CheckInScreen(
     var alreadyCheckedIn by remember { mutableStateOf(false) }
     var secondsRemaining by remember { mutableIntStateOf(0) }
     
-    // 🛡️ PHASE-3: LIVENESS STATE MACHINE
+    // LIVENESS STATE
     var livenessState by remember { mutableStateOf(0) } 
-    var livenessMessage by remember { mutableStateOf("Position your face") }
+    var livenessMessage by remember { mutableStateOf("Position face") }
     var lastFaceDetectedTime by remember { mutableLongStateOf(System.currentTimeMillis()) }
 
-    var currentDistance by remember { mutableStateOf(1.0f) }
     var faceBounds by remember { mutableStateOf<List<Rect>>(emptyList()) }
     var imageSize by remember { mutableStateOf(IntSize.Zero) }
     var imageRotation by remember { mutableStateOf(0) }
 
     val checkInTimestamps = remember { mutableStateMapOf<String, Long>() }
-    val lastWaitSpokenTime = remember { mutableStateMapOf<String, Long>() } // 🔊 Voice Cooldown
+    val lastWaitSpokenTime = remember { mutableStateMapOf<String, Long>() } 
     val tts = remember { mutableStateOf<TextToSpeech?>(null) }
 
     LaunchedEffect(Unit) {
         TextToSpeech(context) { status ->
             if (status == TextToSpeech.SUCCESS) {
                 tts.value?.language = Locale.US
-                tts.value?.setSpeechRate(1.0f)
+                tts.value?.setSpeechRate(1.1f)
             }
         }.also { tts.value = it }
     }
 
-    fun speak(msg: String) {
-        tts.value?.speak(msg, TextToSpeech.QUEUE_FLUSH, null, null)
-    }
+    fun speak(msg: String) = tts.value?.speak(msg, TextToSpeech.QUEUE_FLUSH, null, null)
 
     LaunchedEffect(Unit) {
         gallery = FaceCache.load(context)
         loading = false
     }
 
-    Box(Modifier.fillMaxSize()) {
+    Box(Modifier.fillMaxSize().background(Color.Black)) {
         if (loading) {
             CircularProgressIndicator(Modifier.align(Alignment.Center))
         } else {
             FaceScanner(useBackCamera = currentCameraIsBack) { result ->
                 val now = System.currentTimeMillis()
 
-                // 1. TIMEOUT LOGIC: If no face seen for 2 seconds, reset liveness
+                // 1. INSTANT RESET LOGIC
                 if (result.embeddings.isEmpty()) {
-                    if (now - lastFaceDetectedTime > 2000) {
+                    if (matchName != null) { matchName = null }
+                    if (now - lastFaceDetectedTime > 1500) {
                         livenessState = 0
-                        livenessMessage = "Position your face"
-                        matchName = null
+                        livenessMessage = "Position face"
                         secondsRemaining = 0
                     }
                 } else {
                     lastFaceDetectedTime = now 
                 }
                 
-                // 2. LIVENESS SENSOR DATA
+                // 2. LIVENESS
                 val leftEye = result.leftEyeOpenProb ?: -1f
                 val rightEye = result.rightEyeOpenProb ?: -1f
                 val eyesOpen = (leftEye > 0.80f && rightEye > 0.80f)
@@ -105,19 +102,18 @@ fun CheckInScreen(
                 if (livenessState != 2 && result.embeddings.isNotEmpty()) {
                     if (eyesClosed) {
                         nextLivenessState = 1 
-                        nextLivenessMsg = "Blink Detected..."
+                        nextLivenessMsg = "Blink detected..."
                     } else if (livenessState == 1 && eyesOpen) {
                         nextLivenessState = 2 
-                        nextLivenessMsg = "Liveness Verified! ✅"
+                        nextLivenessMsg = "Verified ✅"
                         speak("Verified")
                     } else if (livenessState == 0) {
-                        nextLivenessMsg = "Please Blink to Verify"
+                        nextLivenessMsg = "Blink to verify"
                     }
                 }
 
-                // 3. RECOGNITION MATH
+                // 3. RECOGNITION (NATIVE C++)
                 var calculatedBestName: String? = null
-                var calculatedBestDist = 1.0f
                 var shouldGreet = false
                 
                 if (result.embeddings.isNotEmpty() && nextLivenessState == 2) {
@@ -127,7 +123,7 @@ fun CheckInScreen(
                     var bestName: String? = null
 
                     for ((name, dbEmbedding) in gallery) {
-                        val dist = cosineDistance(dbEmbedding, embedding)
+                        val dist = NativeMath.cosineDistance(dbEmbedding, embedding)
                         if (dist < bestDist) {
                             secondBestDist = bestDist
                             bestDist = dist
@@ -137,54 +133,38 @@ fun CheckInScreen(
                         }
                     }
 
-                    calculatedBestDist = bestDist
-                    if (bestDist < 0.40f && (secondBestDist - bestDist) > 0.08f) {
+                    if (bestDist < 0.32f && (secondBestDist - bestDist) > 0.12f) {    
                         calculatedBestName = bestName
                         shouldGreet = true
                     }
                 }
 
-                // 4. ATOMIC UI & DATABASE UPDATE
+                // 4. ATOMIC UI UPDATE
                 androidx.compose.runtime.snapshots.Snapshot.withMutableSnapshot {
                     faceBounds = result.bounds
                     imageSize = result.imageSize
                     imageRotation = result.rotation
-                    currentDistance = calculatedBestDist
                     livenessState = nextLivenessState
                     livenessMessage = nextLivenessMsg
 
                     if (shouldGreet && calculatedBestName != null) {
                         val name = calculatedBestName!!
-                        val lastCheckIn = checkInTimestamps[name] ?: 0L
-                        val diff = now - lastCheckIn
-                        val COOLDOWN_MS = 20_000L // 🟢 20 Seconds
+                        val lastCheck = checkInTimestamps[name] ?: 0L
+                        val diff = now - lastCheck
+                        val COOLDOWN_MS = 20_000L 
 
                         if (diff > COOLDOWN_MS) {
-                            // --- SUCCESSFUL CHECK-IN ---
                             checkInTimestamps[name] = now
                             viewModel.saveCheckIn(name) 
-                            
                             matchName = name
                             isRegistered = true
                             alreadyCheckedIn = false
-                            secondsRemaining = 0
-                            
-                            val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
-                            val greeting = when (hour) {
-                                in 5..11 -> "Good morning"
-                                in 12..17 -> "Good afternoon"
-                                else -> "Good evening"
-                            }
-                            speak("Welcome $name. $greeting")
+                            speak("Welcome $name")
                             livenessState = 0 
                         } else {
-                            // --- COOLDOWN PERIOD ---
                             matchName = name
-                            isRegistered = true
                             alreadyCheckedIn = true
                             secondsRemaining = ((COOLDOWN_MS - diff) / 1000).toInt().coerceAtLeast(0)
-
-                            // 🔊 Voice Logic: Only speak "Please wait" every 10 seconds
                             val lastSpoken = lastWaitSpokenTime[name] ?: 0L
                             if (now - lastSpoken > 10_000) {
                                 speak("Please wait")
@@ -203,68 +183,87 @@ fun CheckInScreen(
                 FaceOverlay(faceBounds, imageSize, imageRotation, !currentCameraIsBack, Modifier.fillMaxSize())
             }
 
-            // HEADER: Azura & Camera Switch
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(16.dp).align(Alignment.TopCenter),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+            // 🟢 UNIFIED TOP BAR
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 16.dp, start = 12.dp, end = 12.dp)
+                    .align(Alignment.TopCenter),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Text(
-                    text = "Azura",
-                    style = MaterialTheme.typography.headlineSmall.copy(
-                        fontWeight = FontWeight.Bold, color = Color.White
-                    ),
-                    modifier = Modifier.background(Color.Black.copy(0.6f), CircleShape).padding(horizontal = 16.dp, vertical = 8.dp)
-                )
-
-                IconButton(
-                    onClick = { currentCameraIsBack = !currentCameraIsBack },
-                    modifier = Modifier.background(Color.Black.copy(0.6f), CircleShape)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(Color.Black.copy(0.5f), RoundedCornerShape(24.dp))
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(Icons.Default.CameraAlt, contentDescription = "Switch", tint = Color.White)
-                }
-            }
-
-            // STATUS MESSAGE (Blink status)
-            Text(
-                text = livenessMessage,
-                modifier = Modifier.align(Alignment.TopCenter).padding(top = 90.dp)
-                    .background(Color.Black.copy(alpha = 0.7f), CircleShape).padding(horizontal = 24.dp, vertical = 12.dp),
-                style = MaterialTheme.typography.titleMedium,
-                color = if (livenessState == 2) Color.Green else Color.Yellow,
-                fontWeight = FontWeight.Bold
-            )
-
-            // SUCCESS / TIMER OVERLAY
-            matchName?.let { name ->
-                Column(
-                    modifier = Modifier.align(Alignment.Center).padding(top = 100.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    val message = if (alreadyCheckedIn) {
-                        "Already Recorded\nWait ${secondsRemaining}s"
-                    } else {
-                        "Welcome $name"
-                    }
-
+                    // Logo
                     Text(
-                        text = message,
-                        style = MaterialTheme.typography.headlineMedium.copy(
-                            color = if (alreadyCheckedIn) Color.Yellow else Color.Cyan, 
-                            fontWeight = FontWeight.Bold
-                        ),
-                        modifier = Modifier.background(Color.Black.copy(0.8f), CircleShape).padding(24.dp)
+                        text = "AZURA",
+                        style = MaterialTheme.typography.labelLarge.copy(
+                            fontWeight = FontWeight.Black, 
+                            letterSpacing = 2.sp,
+                            color = Color.White
+                        )
                     )
+
+                    // Liveness Status Badge
+                    Text(
+                        text = livenessMessage.uppercase(),
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = if (livenessState == 2) Color.Green else Color.Yellow
+                        )
+                    )
+
+                    // Camera Toggle Button
+                    IconButton(
+                        onClick = { currentCameraIsBack = !currentCameraIsBack },
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(Icons.Default.CameraAlt, "Switch", tint = Color.White, modifier = Modifier.size(20.dp))
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // 🟢 ANIMATED PILL NOTIFICATION (Success / Cooldown)
+                AnimatedVisibility(
+                    visible = matchName != null,
+                    enter = slideInVertically(initialOffsetY = { -50 }) + fadeIn(),
+                    exit = slideOutVertically(targetOffsetY = { -50 }) + fadeOut()
+                ) {
+                    val isWarning = alreadyCheckedIn
+                    Surface(
+                        shape = RoundedCornerShape(20.dp),
+                        color = if (isWarning) Color(0xFFFFC107) else Color(0xFF00BCD4),
+                        shadowElevation = 6.dp
+                    ) {
+                        Text(
+                            text = if (isWarning) "COOLDOWN: ${secondsRemaining}s" else "SUCCESS: $matchName",
+                            modifier = Modifier.padding(horizontal = 24.dp, vertical = 6.dp),
+                            style = MaterialTheme.typography.labelMedium.copy(
+                                fontWeight = FontWeight.ExtraBold,
+                                color = Color.Black
+                            )
+                        )
+                    }
                 }
             }
 
             // UNREGISTERED ALERT
             if (!isRegistered && livenessState == 2 && faceBounds.isNotEmpty()) {
-                Text(
-                    text = "Not Registered",
-                    modifier = Modifier.align(Alignment.Center).background(Color.Black.copy(0.7f), CircleShape).padding(16.dp),
-                    style = MaterialTheme.typography.bodyLarge.copy(color = Color.Red)
-                )
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 120.dp)
+                        .background(Color.Red.copy(0.8f), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                ) {
+                    Text("USER NOT REGISTERED", color = Color.White, style = MaterialTheme.typography.labelSmall)
+                }
             }
         }
     }
