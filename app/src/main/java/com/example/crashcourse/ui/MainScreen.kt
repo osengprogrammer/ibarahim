@@ -3,10 +3,10 @@ package com.example.crashcourse.ui
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -21,10 +21,11 @@ import com.example.crashcourse.ui.add.AddUserScreen
 import com.example.crashcourse.ui.add.BulkRegistrationScreen
 import com.example.crashcourse.ui.edit.EditUserScreen
 import com.example.crashcourse.viewmodel.FaceViewModel
+import com.example.crashcourse.viewmodel.LicenseViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MainScreen() {
+fun MainScreen(licenseViewModel: LicenseViewModel) {
     val navController = rememberNavController()
     var useBackCamera by remember { mutableStateOf(false) }
 
@@ -39,9 +40,12 @@ fun MainScreen() {
             startDestination = Screen.RegistrationMenu.route,
             modifier = Modifier.padding(paddingValues)
         ) {
+            // 1. Check In Screen
             composable(Screen.CheckIn.route) {
                 CheckInScreen(useBackCamera = useBackCamera)
             }
+
+            // 2. Registration Menu
             composable(Screen.RegistrationMenu.route) {
                 RegistrationMenuScreen(
                     onNavigateToBulkRegister = {
@@ -52,6 +56,8 @@ fun MainScreen() {
                     }
                 )
             }
+
+            // 3. Add User Screen
             composable(Screen.AddUser.route) {
                 AddUserScreen(
                     onNavigateBack = { navController.popBackStack() },
@@ -59,11 +65,15 @@ fun MainScreen() {
                     viewModel = sharedFaceViewModel
                 )
             }
+
+            // 4. Bulk Register Screen
             composable(Screen.BulkRegister.route) {
                 BulkRegistrationScreen(
                     faceViewModel = sharedFaceViewModel
                 )
             }
+
+            // 5. Manage / Face List Screen
             composable(Screen.Manage.route) {
                 FaceListScreen(
                     viewModel = sharedFaceViewModel,
@@ -72,6 +82,8 @@ fun MainScreen() {
                     }
                 )
             }
+
+            // 6. Edit User Screen
             composable(Screen.EditUser.route) { backStackEntry ->
                 val studentId = backStackEntry.arguments?.getString("studentId") ?: ""
                 EditUserScreen(
@@ -82,13 +94,19 @@ fun MainScreen() {
                     faceViewModel = sharedFaceViewModel
                 )
             }
+            
+            // 7. OPTIONS / SETTINGS SCREEN (UPDATED)
             composable(Screen.Options.route) {
-                OptionsManagementScreen(
+                // ✅ CHANGED: Calls SettingsScreen instead of OptionsManagementScreen
+                SettingsScreen(
+                    licenseViewModel = licenseViewModel, 
                     onNavigateToForm = { type ->
                         navController.navigate(Screen.OptionForm.createRoute(type))
                     }
                 )
             }
+            
+            // 8. Option Form (Data Master)
             composable(
                 route = Screen.OptionForm.route,
                 arguments = listOf(
@@ -101,9 +119,13 @@ fun MainScreen() {
                     onNavigateBack = { navController.popBackStack() }
                 )
             }
+
+            // 9. Records Screen
             composable(Screen.CheckInRecord.route) {
                 CheckInRecordScreen()
             }
+
+            // 10. Debug Screen
             composable(Screen.Debug.route) {
                 DebugScreen(viewModel = sharedFaceViewModel)
             }
@@ -113,12 +135,11 @@ fun MainScreen() {
 
 @Composable
 fun BottomNav(navController: NavHostController) {
-    // 🆕 Updated items list to include Records (History)
     val items = listOf(
         Screen.CheckIn  to "Check In",
         Screen.RegistrationMenu to "Register",
         Screen.Manage   to "Manage",
-        Screen.CheckInRecord to "Records", // Added Check-In Record to Bottom Bar
+        Screen.CheckInRecord to "Records",
         Screen.Options  to "Options"
     )
     
@@ -144,7 +165,7 @@ fun BottomNav(navController: NavHostController) {
                             Screen.CheckIn  -> Icons.Default.Person
                             Screen.RegistrationMenu -> Icons.Default.PersonAdd
                             Screen.Manage   -> Icons.AutoMirrored.Filled.List
-                            Screen.CheckInRecord -> Icons.Default.History // Using History icon
+                            Screen.CheckInRecord -> Icons.Default.History
                             Screen.Options  -> Icons.Default.Settings
                             Screen.Debug -> Icons.Default.BugReport
                             else -> Icons.Default.Person

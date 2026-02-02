@@ -1,7 +1,10 @@
 plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
-    alias(libs.plugins.kotlin.ksp)
+    // FIX: We use 'id' without a version so it inherits "2.1.0" from the Project-level build.gradle
+    id("org.jetbrains.kotlin.android")
+    id("org.jetbrains.kotlin.plugin.compose")
+    id("com.google.devtools.ksp")
+    id("com.google.gms.google-services")
 }
 
 ksp {
@@ -65,7 +68,8 @@ android {
     }
 
     composeOptions {
-        kotlinCompilerExtensionVersion = libs.versions.composeCompiler.get()
+        // This is intentionally empty because the 'org.jetbrains.kotlin.plugin.compose' plugin 
+        // handles the compiler version automatically in Kotlin 2.0+
     }
 
     androidResources {
@@ -141,4 +145,17 @@ dependencies {
 
     // Add lifecycle-runtime-compose for collectAsStateWithLifecycle
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.6.2")
+
+    // --- AZURATECH FIREBASE SETUP ---
+    // Import the Firebase BoM
+    implementation(platform("com.google.firebase:firebase-bom:34.8.0"))
+
+    // Analytics
+    implementation("com.google.firebase:firebase-analytics")
+
+    // Firestore (Database)
+    implementation("com.google.firebase:firebase-firestore")
+
+    // Cloud Functions (Licensing)
+    implementation("com.google.firebase:firebase-functions")
 }

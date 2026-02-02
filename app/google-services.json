@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "735604901610",
+    "project_id": "azura-6f4f4",
+    "storage_bucket": "azura-6f4f4.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:735604901610:android:78e99b5b9d2cffb4e6b993",
+        "android_client_info": {
+          "package_name": "com.example.crashcourse"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDECCeLdZzG3VEEt-9sN5gnRNGDUVYE3l8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
