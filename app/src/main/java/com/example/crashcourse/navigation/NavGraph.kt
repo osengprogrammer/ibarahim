@@ -27,7 +27,6 @@ sealed class Screen(val route: String) {
     object OptionForm : Screen("option_form/{type}") {
         fun createRoute(type: String) = "option_form/$type"
     }
-    // Consistent naming for the record history
     object CheckInRecord     : Screen("checkin_record")
     object Debug             : Screen("debug")
 }
@@ -37,18 +36,18 @@ sealed class Screen(val route: String) {
  * This keeps your NavHost in MainScreen clean.
  */
 fun NavGraphBuilder.addAppManagementGraph(navController: NavController) {
-    // Options Management
+    // ✅ UPDATED: Sesuai dengan parameter di OptionsManagementScreen.kt
     composable(Screen.Options.route) {
         OptionsManagementScreen(
-            onNavigateToForm = { type ->
-                navController.navigate(Screen.OptionForm.createRoute(type))
+            onNavigateBack = { 
+                navController.popBackStack() 
             }
         )
     }
 
     // Dynamic Option Forms (Class, Grade, Role, etc.)
     composable(Screen.OptionForm.route) { backStackEntry ->
-        val type = backStackEntry.arguments?.getString("type") ?: ""
+        val type = backStackEntry.arguments?.getString("string") ?: "" // Mengikuti argument name di NavHost jika perlu
         OptionFormScreen(
             type = type,
             onNavigateBack = { navController.popBackStack() }

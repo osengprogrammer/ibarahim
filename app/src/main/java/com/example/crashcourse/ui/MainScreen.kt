@@ -21,15 +21,14 @@ import com.example.crashcourse.ui.add.AddUserScreen
 import com.example.crashcourse.ui.add.BulkRegistrationScreen
 import com.example.crashcourse.ui.edit.EditUserScreen
 import com.example.crashcourse.viewmodel.FaceViewModel
-import com.example.crashcourse.viewmodel.LicenseViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MainScreen(licenseViewModel: LicenseViewModel) {
+fun MainScreen(onLogout: () -> Unit) { // ✅ Sekarang menggunakan callback onLogout
     val navController = rememberNavController()
     var useBackCamera by remember { mutableStateOf(false) }
 
-    // Create a shared ViewModel instance for all screens
+    // Shared ViewModel untuk logika Face Recognition
     val sharedFaceViewModel: FaceViewModel = viewModel()
 
     Scaffold(
@@ -61,7 +60,7 @@ fun MainScreen(licenseViewModel: LicenseViewModel) {
             composable(Screen.AddUser.route) {
                 AddUserScreen(
                     onNavigateBack = { navController.popBackStack() },
-                    onUserAdded = { /* Refresh or update list if needed */ },
+                    onUserAdded = { /* Refresh list jika perlu */ },
                     viewModel = sharedFaceViewModel
                 )
             }
@@ -90,16 +89,16 @@ fun MainScreen(licenseViewModel: LicenseViewModel) {
                     studentId = studentId,
                     useBackCamera = useBackCamera,
                     onNavigateBack = { navController.popBackStack() },
-                    onUserUpdated = { /* Refresh or update list if needed */ },
+                    onUserUpdated = { /* Refresh list jika perlu */ },
                     faceViewModel = sharedFaceViewModel
                 )
             }
             
-            // 7. OPTIONS / SETTINGS SCREEN (UPDATED)
+            // 7. SETTINGS SCREEN (UPDATED)
             composable(Screen.Options.route) {
-                // ✅ CHANGED: Calls SettingsScreen instead of OptionsManagementScreen
+                // ✅ Sekarang memanggil SettingsScreen dengan parameter onLogout
                 SettingsScreen(
-                    licenseViewModel = licenseViewModel, 
+                    onLogout = onLogout, 
                     onNavigateToForm = { type ->
                         navController.navigate(Screen.OptionForm.createRoute(type))
                     }
@@ -120,7 +119,7 @@ fun MainScreen(licenseViewModel: LicenseViewModel) {
                 )
             }
 
-            // 9. Records Screen
+            // 9. Records Screen (History)
             composable(Screen.CheckInRecord.route) {
                 CheckInRecordScreen()
             }

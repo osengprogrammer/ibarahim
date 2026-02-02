@@ -1,6 +1,6 @@
 plugins {
     alias(libs.plugins.android.application)
-    // FIX: We use 'id' without a version so it inherits "2.1.0" from the Project-level build.gradle
+    // FIX: Mengikuti Project-level build.gradle
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
     id("com.google.devtools.ksp")
@@ -20,7 +20,7 @@ android {
         minSdk = 24
         targetSdk = 35
         versionCode = 1
-        versionName = "1.0"
+        versionName = "1.1" // Naikkan ke 1.1 untuk Auth System
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -68,8 +68,7 @@ android {
     }
 
     composeOptions {
-        // This is intentionally empty because the 'org.jetbrains.kotlin.plugin.compose' plugin 
-        // handles the compiler version automatically in Kotlin 2.0+
+        // Otomatis dihandle oleh Kotlin 2.0+
     }
 
     androidResources {
@@ -143,19 +142,23 @@ dependencies {
     implementation("com.itextpdf:itext7-core:7.2.5")
     implementation("com.opencsv:opencsv:5.7.1")
 
-    // Add lifecycle-runtime-compose for collectAsStateWithLifecycle
+    // Lifecycle Compose Support
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.6.2")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.6.2")
 
-    // --- AZURATECH FIREBASE SETUP ---
-    // Import the Firebase BoM
-    implementation(platform("com.google.firebase:firebase-bom:34.8.0"))
-
-    // Analytics
-    implementation("com.google.firebase:firebase-analytics")
+   // --- AZURATECH FIREBASE STACK (FIXED VERSION) ---
+    // Kita tidak pakai platform BoM dulu untuk sementara agar Gradle tidak bingung
+    
+    // Authentication
+    implementation("com.google.firebase:firebase-auth-ktx:22.3.1")
 
     // Firestore (Database)
-    implementation("com.google.firebase:firebase-firestore")
+    implementation("com.google.firebase:firebase-firestore-ktx:24.10.1")
 
-    // Cloud Functions (Licensing)
-    implementation("com.google.firebase:firebase-functions")
+    // Analytics & Functions
+    implementation("com.google.firebase:firebase-analytics-ktx:21.5.0")
+    implementation("com.google.firebase:firebase-functions-ktx:20.4.0")
+    
+    // Jangan lupa common ktx untuk interoperabilitas coroutines
+    implementation("com.google.firebase:firebase-common-ktx:20.4.2")
 }

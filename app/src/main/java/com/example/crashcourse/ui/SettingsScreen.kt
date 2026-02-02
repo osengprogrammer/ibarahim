@@ -11,30 +11,22 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.example.crashcourse.viewmodel.LicenseState
-import com.example.crashcourse.viewmodel.LicenseViewModel
 
-// ✅ RENAMED FUNCTION to prevent conflict with the other file
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
-    licenseViewModel: LicenseViewModel,
+    onLogout: () -> Unit, // ✅ Menggunakan callback logout dari MainActivity
     onNavigateToForm: (String) -> Unit
 ) {
-    // Ambil status lisensi untuk menampilkan Nama Sekolah
-    val licenseState by licenseViewModel.licenseState.collectAsState()
-    val schoolName = if (licenseState is LicenseState.Valid) {
-        (licenseState as LicenseState.Valid).schoolName
-    } else {
-        "AzuraTech User"
-    }
+    // Karena info sekolah sekarang ada di database Firebase User, 
+    // untuk sementara kita set label default. 
+    // Anda bisa mengembangkannya dengan mempassing nama sekolah ke sini nanti.
+    val schoolName = "AzuraTech School" 
 
     Scaffold(
         topBar = {
@@ -53,7 +45,7 @@ fun SettingsScreen(
                 .padding(padding)
                 .background(MaterialTheme.colorScheme.surface)
         ) {
-            // --- BAGIAN 1: INFO LISENSI ---
+            // --- BAGIAN 1: INFO STATUS AKUN ---
             item {
                 Card(
                     modifier = Modifier
@@ -79,9 +71,9 @@ fun SettingsScreen(
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = "Lisensi Aktif",
+                                text = "Akun Terverifikasi",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = Color(0xFF4CAF50) // Warna Hijau
+                                color = Color(0xFF4CAF50) // Warna Hijau (Success)
                             )
                         }
                     }
@@ -112,10 +104,10 @@ fun SettingsScreen(
                 )
             }
 
-            // --- TOMBOL LOGOUT ---
+            // --- TOMBOL LOGOUT (Sistem Baru) ---
             item {
                 Button(
-                    onClick = { licenseViewModel.clearLicense() }, // 👈 INI TRIGGER LOGOUT
+                    onClick = { onLogout() }, // ✅ Memanggil fungsi logout pusat
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(16.dp),
@@ -124,7 +116,17 @@ fun SettingsScreen(
                 ) {
                     Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null)
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Nonaktifkan Lisensi (Logout)")
+                    Text("Keluar dari Akun")
+                }
+            }
+
+            item {
+                Box(modifier = Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
+                    Text(
+                        text = "Azura Attendance v1.1",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.outline
+                    )
                 }
             }
         }
@@ -132,7 +134,7 @@ fun SettingsScreen(
 }
 
 @Composable
-fun OptionItem(title: String, onClick: () -> Unit) {
+private fun OptionItem(title: String, onClick: () -> Unit) {
     Card(
         modifier = Modifier
             .fillMaxWidth()

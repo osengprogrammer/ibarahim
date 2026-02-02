@@ -12,7 +12,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.example.crashcourse.db.*
 import com.example.crashcourse.viewmodel.OptionsViewModel
 
 // Import helper functions
@@ -28,13 +27,13 @@ import com.example.crashcourse.ui.OptionsHelpers.getId
 @Composable
 fun OptionsManagementScreen(
     viewModel: OptionsViewModel = viewModel(),
-    onNavigateToForm: (type: String) -> Unit
+    onNavigateBack: () -> Unit // Menambah navigasi balik
 ) {
     var selectedOptionType by remember { mutableStateOf("Class") }
     var expanded by remember { mutableStateOf(false) }
     val optionTypes = listOf("Class", "SubClass", "Grade", "SubGrade", "Program", "Role")
 
-    // Collect lists
+    // Collect lists dari database Room
     val classOptions by viewModel.classOptions.collectAsStateWithLifecycle(emptyList())
     val subClassOptions by viewModel.subClassOptions.collectAsStateWithLifecycle(emptyList())
     val gradeOptions by viewModel.gradeOptions.collectAsStateWithLifecycle(emptyList())
@@ -61,7 +60,12 @@ fun OptionsManagementScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Manage Options") }
+                title = { Text("Kelola Data Master") },
+                navigationIcon = {
+                    IconButton(onClick = onNavigateBack) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = "Kembali")
+                    }
+                }
             )
         }
     ) { padding ->
@@ -71,19 +75,16 @@ fun OptionsManagementScreen(
                 .padding(padding)
                 .padding(16.dp)
         ) {
-            // Type selector dropdown
+            // Dropdown untuk pilih tipe data (Kelas, Jurusan, dll)
             Box(modifier = Modifier.fillMaxWidth()) {
                 OutlinedTextField(
                     value = selectedOptionType,
                     onValueChange = {},
                     readOnly = true,
-                    label = { Text("Select Option Type") },
+                    label = { Text("Pilih Tipe Data") },
                     trailingIcon = {
                         IconButton(onClick = { expanded = !expanded }) {
-                            Icon(
-                                imageVector = Icons.Filled.ArrowDropDown,
-                                contentDescription = "Select option type"
-                            )
+                            Icon(Icons.Filled.ArrowDropDown, contentDescription = null)
                         }
                     },
                     modifier = Modifier.fillMaxWidth()
@@ -100,7 +101,6 @@ fun OptionsManagementScreen(
                             onClick = {
                                 selectedOptionType = type
                                 expanded = false
-                                onNavigateToForm(type)
                             }
                         )
                     }
@@ -109,7 +109,7 @@ fun OptionsManagementScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Inline editable list
+            // List data yang bisa di-edit secara inline
             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(options) { option ->
                     ExpandableOptionCard(
@@ -145,17 +145,16 @@ fun ExpandableOptionCard(
     onSave: (Any) -> Unit,
     onDelete: (Any) -> Unit
 ) {
-    var expanded by remember { mutableStateOf(false) }
+    var isExpanded by remember { mutableStateOf(false) }
     var dropdownExpanded by remember { mutableStateOf(false) }
 
-    // States for fields
     var name by remember { mutableStateOf(getName(option)) }
     var order by remember { mutableStateOf(getOrder(option).toString()) }
     var parentId by remember { mutableStateOf(getParentId(option) ?: 1) }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
-        onClick = { expanded = !expanded }
+        onClick = { isExpanded = !isExpanded }
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(
@@ -164,36 +163,32 @@ fun ExpandableOptionCard(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text(getName(option), style = MaterialTheme.typography.titleMedium)
-                IconButton(onClick = { expanded = !expanded }) {
-                    Icon(
-                        imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                        contentDescription = if (expanded) "Collapse" else "Expand"
-                    )
-                }
+                Icon(
+                    imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = null
+                )
             }
 
-            if (expanded) {
+            if (isExpanded) {
                 Spacer(modifier = Modifier.height(8.dp))
                 OutlinedTextField(
                     value = name,
-                    onValueChange = { new -> 
-                        name = new
-                        onSave(setName(option, new))
+                    onValueChange = { 
+                        name = it
+                        onSave(setName(option, it))
                     },
-                    label = { Text("Name") },
-                    singleLine = true,
+                    label = { Text("Nama") },
                     modifier = Modifier.fillMaxWidth()
                 )
 
                 Spacer(modifier = Modifier.height(8.dp))
                 OutlinedTextField(
                     value = order,
-                    onValueChange = { new -> 
-                        order = new
-                        onSave(setOrder(option, new.toIntOrNull() ?: 0))
+                    onValueChange = { 
+                        order = it
+                        onSave(setOrder(option, it.toIntOrNull() ?: 0))
                     },
-                    label = { Text("Order") },
-                    singleLine = true,
+                    label = { Text("Urutan (Order)") },
                     modifier = Modifier.fillMaxWidth()
                 )
 
@@ -201,13 +196,13 @@ fun ExpandableOptionCard(
                     Spacer(modifier = Modifier.height(8.dp))
                     Box(modifier = Modifier.fillMaxWidth()) {
                         OutlinedTextField(
-                            value = parentOptions.find { getId(it) == parentId }?.let { getName(it) } ?: "",
+                            value = parentOptions.find { getId(it) == parentId }?.let { getName(it) } ?: "Pilih Parent",
                             onValueChange = {},
                             readOnly = true,
-                            label = { Text("Parent") },
+                            label = { Text("Induk (Parent)") },
                             trailingIcon = {
                                 IconButton(onClick = { dropdownExpanded = !dropdownExpanded }) {
-                                    Icon(Icons.Default.ArrowDropDown, "Select parent")
+                                    Icon(Icons.Default.ArrowDropDown, null)
                                 }
                             },
                             modifier = Modifier.fillMaxWidth()
@@ -215,8 +210,7 @@ fun ExpandableOptionCard(
 
                         DropdownMenu(
                             expanded = dropdownExpanded,
-                            onDismissRequest = { dropdownExpanded = false },
-                            modifier = Modifier.fillMaxWidth()
+                            onDismissRequest = { dropdownExpanded = false }
                         ) {
                             parentOptions.forEach { parent ->
                                 DropdownMenuItem(
@@ -232,14 +226,15 @@ fun ExpandableOptionCard(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(12.dp))
                 Button(
                     onClick = { onDelete(option) },
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
+                    modifier = Modifier.align(Alignment.End)
                 ) {
-                    Icon(Icons.Default.Delete, contentDescription = "Delete")
-                    Spacer(Modifier.width(4.dp))
-                    Text("Delete")
+                    Icon(Icons.Default.Delete, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Hapus")
                 }
             }
         }
