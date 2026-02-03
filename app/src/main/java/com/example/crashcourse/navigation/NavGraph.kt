@@ -7,10 +7,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.navigation.NavController
 import androidx.navigation.NavGraphBuilder
+import androidx.navigation.NavType
 import androidx.navigation.compose.composable
-import com.example.crashcourse.ui.OptionsManagementScreen
-import com.example.crashcourse.ui.OptionFormScreen
-import com.example.crashcourse.ui.CheckInRecordScreen
+import androidx.navigation.navArgument
+// Import UI secara eksplisit agar tidak ada "Unresolved Reference"
+import com.example.crashcourse.ui.*
+import com.example.crashcourse.viewmodel.AuthState
+import com.example.crashcourse.viewmodel.AuthViewModel
 
 sealed class Screen(val route: String) {
     object CheckIn           : Screen("check_in")
@@ -29,40 +32,118 @@ sealed class Screen(val route: String) {
     }
     object CheckInRecord     : Screen("checkin_record")
     object Debug             : Screen("debug")
+    object Profile           : Screen("profile")
+    
+    // 🔥 Admin & Monitoring Routes
+    object AdminDashboard    : Screen("admin_dashboard")
+    object LiveMonitor       : Screen("live_monitor")
+    object UserManagement    : Screen("user_management")
+    object EditUserScope : Screen("edit_user_scope/{userId}") {
+        fun createRoute(userId: String) = "edit_user_scope/$userId"
+    }
 }
 
 /**
- * Extension function to add specialized management screens to the navigation graph.
- * This keeps your NavHost in MainScreen clean.
+ * Extension function untuk menangani navigasi management & profile.
+ * Terintegrasi dengan sistem Role (Admin, Supervisor, User).
  */
-fun NavGraphBuilder.addAppManagementGraph(navController: NavController) {
-    // ✅ UPDATED: Sesuai dengan parameter di OptionsManagementScreen.kt
-    composable(Screen.Options.route) {
-        OptionsManagementScreen(
-            onNavigateBack = { 
-                navController.popBackStack() 
+fun NavGraphBuilder.addAppManagementGraph(
+    navController: NavController,
+    authState: AuthState.Active,
+    authViewModel: AuthViewModel
+) {
+    val isAdmin = authState.role == "ADMIN"
+    val isSupervisor = authState.role == "SUPERVISOR" || isAdmin
+
+    // 1. Profile Screen
+    composable(Screen.Profile.route) {
+        ProfileScreen(
+            authState = authState,
+            onLogout = { authViewModel.logout() },
+            onInviteStaff = { email, pass ->
+                authViewModel.inviteStaff(email, pass)
             }
         )
     }
 
-    // Dynamic Option Forms (Class, Grade, Role, etc.)
-    composable(Screen.OptionForm.route) { backStackEntry ->
-        val type = backStackEntry.arguments?.getString("string") ?: "" // Mengikuti argument name di NavHost jika perlu
-        OptionFormScreen(
-            type = type,
-            onNavigateBack = { navController.popBackStack() }
-        )
+    // 2. User Management (Daftar Guru/Staff)
+    composable(Screen.UserManagement.route) {
+        if (isAdmin) {
+            UserManagementScreen(
+                onBack = { navController.popBackStack() },
+                onEditUser = { userId -> 
+                    navController.navigate(Screen.EditUserScope.createRoute(userId)) 
+                }
+            )
+        } else {
+            AccessDeniedScreen("Hanya Admin yang bisa mengelola staff.")
+        }
     }
 
-    // Check-In History Records
+    // 3. Edit User Scope (Assign Kelas/Role)
+    composable(
+        route = Screen.EditUserScope.route,
+        arguments = listOf(navArgument("userId") { type = NavType.StringType })
+    ) { backStackEntry ->
+        if (isAdmin) {
+            val userId = backStackEntry.arguments?.getString("userId") ?: ""
+            EditUserScopeScreen(
+                userId = userId,
+                onBack = { navController.popBackStack() }
+            )
+        } else {
+            AccessDeniedScreen()
+        }
+    }
+
+    // 4. Options Management (Master Data)
+    composable(Screen.Options.route) {
+        if (isAdmin) {
+            OptionsManagementScreen() 
+        } else {
+            AccessDeniedScreen("Hanya Admin yang bisa mengelola data master.")
+        }
+    }
+
+    // 5. Dynamic Option Forms
+    composable(
+        route = Screen.OptionForm.route,
+        arguments = listOf(navArgument("type") { type = NavType.StringType })
+    ) { backStackEntry ->
+        if (isAdmin) {
+            val type = backStackEntry.arguments?.getString("type") ?: ""
+            OptionFormScreen(
+                type = type,
+                onNavigateBack = { navController.popBackStack() }
+            )
+        } else {
+            AccessDeniedScreen()
+        }
+    }
+
+    // 6. Check-In History Records
     composable(Screen.CheckInRecord.route) {
-        CheckInRecordScreen()
+        if (isSupervisor) {
+            CheckInRecordScreen(
+                authState = authState
+            )
+        } else {
+            AccessDeniedScreen("Riwayat hanya bisa diakses oleh Supervisor.")
+        }
+    }
+
+    // 7. Face Management (Manage Faces)
+    composable(Screen.Manage.route) {
+        // ✅ TETAP MENGGUNAKAN FaceListScreen DENGAN authState
+        FaceListScreen(
+            authState = authState,
+            onEditUser = { student ->
+                navController.navigate(Screen.EditUser.createRoute(student.studentId))
+            }
+        )
     }
 }
 
-/**
- * Helper button to navigate to options from other screens
- */
 @Composable
 fun OptionsManagementButton(navController: NavController) {
     Button(

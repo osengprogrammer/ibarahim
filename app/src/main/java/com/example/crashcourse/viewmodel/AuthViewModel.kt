@@ -1,12 +1,14 @@
 package com.example.crashcourse.viewmodel
 
 import android.app.Application
+import android.content.Context
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.crashcourse.util.DeviceUtil
 import com.google.firebase.Firebase
-import com.google.firebase.auth.FirebaseAuth // Pastikan ini ada
-import com.google.firebase.auth.auth         // Pastikan ini ada
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.auth
 import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.firestore
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -14,14 +16,14 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
+import java.util.Date
 
 class AuthViewModel(application: Application) : AndroidViewModel(application) {
 
     private val auth: FirebaseAuth = Firebase.auth
     private val db = Firebase.firestore
     private val currentDeviceId = DeviceUtil.getUniqueDeviceId(application.applicationContext)
-    
-    // Listener agar app otomatis terbuka kalau Admin mengaktifkan akun
+    private val prefs = application.getSharedPreferences("AzuraAuthPrefs", Context.MODE_PRIVATE)
     private var statusListener: ListenerRegistration? = null
 
     private val _authState = MutableStateFlow<AuthState>(AuthState.Checking)
@@ -31,7 +33,6 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         checkCurrentUser()
     }
 
-    // 1. Cek User Saat Buka Aplikasi
     private fun checkCurrentUser() {
         val currentUser = auth.currentUser
         if (currentUser != null) {
@@ -41,58 +42,53 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // 2. Registrasi Baru (Otomatis Kirim Hardware ID)
+    // --- 1. REGISTRASI ---
     fun register(email: String, pass: String, schoolName: String) {
         if (email.isBlank() || pass.isBlank() || schoolName.isBlank()) {
             _authState.value = AuthState.Error("Semua kolom wajib diisi.")
             return
         }
-
         viewModelScope.launch {
             _authState.value = AuthState.Loading
             try {
-                // Buat Akun Auth
                 val result = auth.createUserWithEmailAndPassword(email, pass).await()
                 val uid = result.user?.uid ?: throw Exception("Gagal mendapatkan UID")
-
-                // Simpan Data User + DEVICE ID ke Firestore
                 val userData = hashMapOf(
+                    "uid" to uid,
                     "email" to email,
                     "school_name" to schoolName,
-                    "device_id" to currentDeviceId, // <--- KUNCI PENGAMAN
-                    "status" to "PENDING", // Menunggu Admin
+                    "device_id" to currentDeviceId,
+                    "status" to "PENDING",
+                    "role" to "USER",
+                    "max_offline_days" to 7,
+                    "assigned_classes" to emptyList<String>(), // Default kosong
                     "created_at" to System.currentTimeMillis()
                 )
-
                 db.collection("users").document(uid).set(userData).await()
                 startListeningToUserStatus(uid)
-
             } catch (e: Exception) {
                 _authState.value = AuthState.Error("Registrasi Gagal: ${e.message}")
             }
         }
     }
 
-    // 3. Login (Cek Password & Hardware ID)
+    // --- 2. LOGIN ---
     fun login(email: String, pass: String) {
         if (email.isBlank() || pass.isBlank()) {
             _authState.value = AuthState.Error("Email dan Password wajib diisi.")
             return
         }
-
         viewModelScope.launch {
             _authState.value = AuthState.Loading
             try {
                 val result = auth.signInWithEmailAndPassword(email, pass).await()
                 val uid = result.user?.uid!!
-                
-                // Cek apakah HP ini sesuai dengan yang terdaftar?
                 val doc = db.collection("users").document(uid).get().await()
                 val registeredDevice = doc.getString("device_id")
 
                 if (registeredDevice != null && registeredDevice != currentDeviceId) {
                     auth.signOut()
-                    _authState.value = AuthState.Error("AKSES DITOLAK.\nAkun ini terkunci pada perangkat: $registeredDevice.\nAnda menggunakan: $currentDeviceId")
+                    _authState.value = AuthState.Error("AKSES DITOLAK.\nPerangkat tidak sesuai lisensi.")
                 } else {
                     startListeningToUserStatus(uid)
                 }
@@ -102,54 +98,136 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // 4. Lupa Password (Reset Link)
-    fun sendPasswordReset(email: String) {
-        if (email.isBlank()) {
-            _authState.value = AuthState.Error("Mohon isi email terlebih dahulu.")
+    // --- 3. INVITE STAFF ---
+    fun inviteStaff(email: String, pass: String) {
+        if (email.isBlank() || pass.isBlank()) {
+            _authState.value = AuthState.Error("Data guru tidak lengkap.")
             return
         }
-        _authState.value = AuthState.Loading
-        auth.sendPasswordResetEmail(email)
-            .addOnSuccessListener {
-                _authState.value = AuthState.Error("Link reset password telah dikirim ke $email.\nCek inbox/spam Anda.")
+        viewModelScope.launch {
+            try {
+                val adminUid = auth.currentUser!!.uid
+                val adminDoc = db.collection("users").document(adminUid).get().await()
+                val schoolName = adminDoc.getString("school_name") ?: ""
+                val expiryDate = adminDoc.getTimestamp("expiry_date")
+                val maxOffline = adminDoc.getLong("max_offline_days") ?: 7
+
+                val result = auth.createUserWithEmailAndPassword(email, pass).await()
+                val newUid = result.user?.uid ?: throw Exception("Gagal")
+
+                val staffData = hashMapOf(
+                    "uid" to newUid,
+                    "email" to email,
+                    "school_name" to schoolName,
+                    "device_id" to currentDeviceId,
+                    "status" to "ACTIVE",
+                    "role" to "USER",
+                    "expiry_date" to expiryDate,
+                    "max_offline_days" to maxOffline,
+                    "assigned_classes" to emptyList<String>(), 
+                    "invited_by" to adminUid,
+                    "created_at" to System.currentTimeMillis()
+                )
+                db.collection("users").document(newUid).set(staffData).await()
+
+                auth.signOut() 
+                statusListener?.remove()
+                _authState.value = AuthState.LoggedOut
+                
+            } catch (e: Exception) {
+                _authState.value = AuthState.Error("Gagal Invite: ${e.message}")
             }
-            .addOnFailureListener {
-                _authState.value = AuthState.Error("Gagal kirim email: ${it.message}")
-            }
+        }
     }
 
-    // 5. Realtime Monitor (Jantung Sistem)
-    private fun startListeningToUserStatus(uid: String) {
-        statusListener?.remove() // Hapus listener lama biar gak numpuk
+    // --- 4. RESET PASSWORD ---
+    fun sendPasswordReset(email: String) {
+        if (email.isBlank()) {
+            _authState.value = AuthState.Error("Isi email dulu.")
+            return
+        }
+        viewModelScope.launch {
+            try {
+                auth.sendPasswordResetEmail(email).await()
+                _authState.value = AuthState.Error("Link reset terkirim.")
+            } catch (e: Exception) {
+                _authState.value = AuthState.Error("Gagal: ${e.message}")
+            }
+        }
+    }
 
+    // --- 5. MONITORING ---
+    private fun startListeningToUserStatus(uid: String) {
+        statusListener?.remove()
         statusListener = db.collection("users").document(uid)
             .addSnapshotListener { snapshot, e ->
                 if (e != null) {
-                    _authState.value = AuthState.Error("Sinkronisasi error: ${e.message}")
+                    val savedMaxOffline = prefs.getInt("max_offline_days", 7)
+                    checkOfflineGracePeriod(savedMaxOffline)
                     return@addSnapshotListener
                 }
 
                 if (snapshot != null && snapshot.exists()) {
                     val status = snapshot.getString("status") ?: "PENDING"
+                    val role = snapshot.getString("role") ?: "USER"
+                    val email = snapshot.getString("email") ?: ""
                     val schoolName = snapshot.getString("school_name") ?: "User"
                     val registeredDevice = snapshot.getString("device_id")
+                    val expiryTimestamp = snapshot.getTimestamp("expiry_date")
+                    val maxOffline = snapshot.getLong("max_offline_days")?.toInt() ?: 7
+                    
+                    // ✅ AMBIL DATA ASSIGNED CLASSES SECARA AMAN
+                    val assignedFromDb = (snapshot.get("assigned_classes") as? List<*>)?.filterIsInstance<String>() ?: emptyList()
+                    
+                    val currentTime = Date()
 
-                    // Security Check Double Layer
-                    if (registeredDevice != currentDeviceId) {
-                         _authState.value = AuthState.Error("Sesi dicabut. Perangkat tidak cocok.")
+                    prefs.edit().apply {
+                        putLong("last_sync_time", System.currentTimeMillis())
+                        putInt("max_offline_days", maxOffline)
+                        apply()
+                    }
+
+                    if (registeredDevice != null && registeredDevice != currentDeviceId) {
+                         _authState.value = AuthState.Error("Sesi dicabut. Hardware ID mismatch.")
                          return@addSnapshotListener
                     }
 
+                    if (expiryTimestamp != null && currentTime.after(expiryTimestamp.toDate())) {
+                        _authState.value = AuthState.StatusWaiting("MASA BERLAKU HABIS.")
+                        return@addSnapshotListener
+                    }
+
                     when (status) {
-                        "ACTIVE" -> _authState.value = AuthState.Active(schoolName)
-                        "BANNED" -> _authState.value = AuthState.StatusWaiting("AKUN DIBEKUKAN.\nHubungi Admin AzuraTech.")
-                        "EXPIRED" -> _authState.value = AuthState.StatusWaiting("Masa Aktif Habis.\nSilakan perpanjang lisensi.")
-                        else -> _authState.value = AuthState.StatusWaiting("MENUNGGU AKTIVASI.\n\nAdmin sedang memverifikasi data sekolah Anda.\nID Perangkat: $currentDeviceId")
+                        "ACTIVE" -> {
+                            if (expiryTimestamp == null) {
+                                _authState.value = AuthState.StatusWaiting("MENUNGGU KONFIGURASI ADMIN.")
+                            } else {
+                                // ✅ SEKARANG MENGIRIM assignedClasses KE UI & VIEWMODEL LAIN
+                                _authState.value = AuthState.Active(
+                                    uid = uid,
+                                    email = email,
+                                    schoolName = schoolName,
+                                    role = role,
+                                    expiryMillis = expiryTimestamp.seconds * 1000,
+                                    assignedClasses = assignedFromDb
+                                )
+                            }
+                        }
+                        "BANNED" -> _authState.value = AuthState.StatusWaiting("AKUN DIBEKUKAN.")
+                        else -> _authState.value = AuthState.StatusWaiting("MENUNGGU AKTIVASI.\nID: $currentDeviceId")
                     }
                 } else {
                     _authState.value = AuthState.LoggedOut
                 }
             }
+    }
+
+    private fun checkOfflineGracePeriod(maxDays: Int) {
+        val lastSync = prefs.getLong("last_sync_time", System.currentTimeMillis())
+        val diffDays = (System.currentTimeMillis() - lastSync) / (1000 * 60 * 60 * 24)
+        if (diffDays > maxDays) {
+            _authState.value = AuthState.StatusWaiting("OFFLINE TERLALU LAMA. Hubungkan internet.")
+        }
     }
 
     fun logout() {
@@ -163,7 +241,14 @@ sealed class AuthState {
     object Checking : AuthState()
     object LoggedOut : AuthState()
     object Loading : AuthState()
-    data class Active(val schoolName: String) : AuthState()
+    data class Active(
+        val uid: String,
+        val email: String,
+        val schoolName: String, 
+        val role: String, 
+        val expiryMillis: Long,
+        val assignedClasses: List<String> 
+    ) : AuthState()
     data class StatusWaiting(val message: String) : AuthState()
     data class Error(val message: String) : AuthState()
 }

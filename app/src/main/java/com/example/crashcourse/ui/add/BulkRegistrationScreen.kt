@@ -27,14 +27,14 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.crashcourse.viewmodel.FaceViewModel
 import com.example.crashcourse.utils.PhotoProcessingUtils
 import com.example.crashcourse.utils.PhotoStorageUtils
-import com.example.crashcourse.viewmodel.BulkRegistrationViewModel
+import com.example.crashcourse.viewmodel.RegisterViewModel
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun BulkRegistrationScreen(
     faceViewModel: FaceViewModel = viewModel(),
-    bulkViewModel: BulkRegistrationViewModel = viewModel()
+    bulkViewModel: RegisterViewModel = viewModel()
 ) {
     val context = LocalContext.current
     val bulkState by bulkViewModel.state.collectAsState()

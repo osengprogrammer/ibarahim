@@ -10,13 +10,16 @@ data class CheckInRecord(
     val id: Int = 0,
     val name: String,
     val timestamp: LocalDateTime,
-    val faceId: Int,
-    val classId: Int?,
-    val subClassId: Int?,
-    val gradeId: Int?,
-    val subGradeId: Int?,
-    val programId: Int?,
-    val roleId: Int?,
+    val faceId: Int? = null,
+    val status: String = "PRESENT",
+    val classId: Int? = null,
+    val subClassId: Int? = null,
+    val gradeId: Int? = null,
+    val subGradeId: Int? = null,
+    val programId: Int? = null,
+    val roleId: Int? = null,
+    val note: String? = null,
+    // ✅ Tambahkan kembali dua field ini agar Export & ViewModel tidak error
     val className: String? = null,
     val gradeName: String? = null
 )

@@ -1,52 +1,52 @@
 package com.example.crashcourse.ui
 
-import android.content.Context
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
-import androidx.compose.ui.platform.LocalContext
-import com.example.crashcourse.utils.showToast
-import androidx.compose.material3.DatePicker
-import androidx.compose.material3.DatePickerState
-import androidx.compose.material3.SelectableDates
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.viewmodel.compose.viewModel
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.flow.first
-import java.time.Instant
-import java.time.LocalDate
-import java.time.LocalDateTime
-import java.time.LocalTime
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
-import com.example.crashcourse.viewmodel.CheckInViewModel
-import com.example.crashcourse.viewmodel.OptionsViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.crashcourse.db.*
+import com.example.crashcourse.utils.showToast
+import com.example.crashcourse.viewmodel.CheckInViewModel
+import com.example.crashcourse.viewmodel.FaceViewModel
+import com.example.crashcourse.viewmodel.OptionsViewModel
+import com.example.crashcourse.viewmodel.AuthState // ✅ Import AuthState
+import kotlinx.coroutines.launch
+import java.time.*
+import java.time.format.DateTimeFormatter
 
 private val dateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CheckInRecordScreen(
+    authState: AuthState.Active, // ✅ FIX: Wajib kirim AuthState agar bisa filter Scope
     checkInViewModel: CheckInViewModel = viewModel(),
-    optionsViewModel: OptionsViewModel = viewModel()
+    optionsViewModel: OptionsViewModel = viewModel(),
+    faceViewModel: FaceViewModel = viewModel()
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
-    // Local filter states
+    // --- STATES FILTERS ---
     var nameFilter by remember { mutableStateOf("") }
     var startDate by remember { mutableStateOf<LocalDate?>(null) }
     var endDate by remember { mutableStateOf<LocalDate?>(null) }
     var showFilters by remember { mutableStateOf(false) }
+    
     var selectedClass by remember { mutableStateOf<ClassOption?>(null) }
     var selectedSubClass by remember { mutableStateOf<SubClassOption?>(null) }
     var selectedGrade by remember { mutableStateOf<GradeOption?>(null) }
@@ -54,238 +54,154 @@ fun CheckInRecordScreen(
     var selectedProgram by remember { mutableStateOf<ProgramOption?>(null) }
     var selectedRole by remember { mutableStateOf<RoleOption?>(null) }
 
-    // Collect options for dropdowns
-    val classOptions by optionsViewModel.classOptions.collectAsStateWithLifecycle(initialValue = emptyList())
-    val subClassOptions by optionsViewModel.subClassOptions.collectAsStateWithLifecycle(initialValue = emptyList())
-    val gradeOptions by optionsViewModel.gradeOptions.collectAsStateWithLifecycle(initialValue = emptyList())
-    val subGradeOptions by optionsViewModel.subGradeOptions.collectAsStateWithLifecycle(initialValue = emptyList())
-    val programOptions by optionsViewModel.programOptions.collectAsStateWithLifecycle(initialValue = emptyList())
-    val roleOptions by optionsViewModel.roleOptions.collectAsStateWithLifecycle(initialValue = emptyList())
+    // --- STATES CRUD ---
+    var showManualDialog by remember { mutableStateOf(false) }
+    var recordToEdit by remember { mutableStateOf<CheckInRecord?>(null) }
 
-    var isLoading by remember { mutableStateOf(false) }
-    var records by remember { mutableStateOf(emptyList<CheckInRecord>()) }
-    val scope = rememberCoroutineScope()
+    // --- DATA COLLECTIONS ---
+    // ✅ FIX 1: Gunakan data murid yang juga sudah difilter Scope
+    val scopedStudents by faceViewModel.getScopedFaceList(authState).collectAsStateWithLifecycle(initialValue = emptyList())
 
-    // Add FaceViewModel for user filtering
-    val faceViewModel: com.example.crashcourse.viewmodel.FaceViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
-    val allFaces by faceViewModel.faceList.collectAsStateWithLifecycle(emptyList())
-
-    // Create a common search function that debounces the search
-    val performSearch: () -> Unit = {
-        println("Starting search...") // Debug log
-        scope.launch {
-            if (!isLoading) {
-                isLoading = true
-                try {
-                    println("Search params: name=$nameFilter, start=$startDate, end=$endDate, class=${selectedClass?.id}, subClass=${selectedSubClass?.id}") // Debug log
-                    // Search with all filters - use first() to get only the first emission
-                    val flow = checkInViewModel.getFilteredCheckIns(
-                        nameFilter = nameFilter,
-                        startDate = startDate?.format(dateFormatter) ?: "",
-                        endDate = endDate?.format(dateFormatter) ?: "",
-                        classId = selectedClass?.id,
-                        subClassId = selectedSubClass?.id,
-                        gradeId = selectedGrade?.id,
-                        subGradeId = selectedSubGrade?.id,
-                        programId = selectedProgram?.id,
-                        roleId = selectedRole?.id
-                    )
-                    println("Got flow from ViewModel") // Debug log
-                    val result = flow.first() // Get only the first emission instead of collecting indefinitely
-                    println("Got results from flow") // Debug log
-                    records = result
-                    println("Search results: ${result.size} records found") // Debug log
-                } catch (e: Exception) {
-                    println("Search error: ${e.message}")
-                    e.printStackTrace() // Print full stack trace for debugging
-                } finally {
-                    println("Search completed, loading = false") // Debug log
-                    isLoading = false
-                }
-            }
-        }
-    }
-
-    // Make filters reactive with debounce
-    LaunchedEffect(
-        nameFilter,
-        startDate,
-        endDate,
-        selectedClass,
-        selectedSubClass,
-        selectedGrade,
-        selectedSubGrade,
-        selectedProgram,
-        selectedRole
+    // ✅ FIX 2: Gunakan getScopedCheckIns (Bukan getFilteredCheckIns yang private)
+    val records by remember(
+        nameFilter, startDate, endDate, selectedClass, selectedSubClass, 
+        selectedGrade, selectedSubGrade, selectedProgram, selectedRole, authState
     ) {
-        try {
-            // Small delay to avoid too frequent searches while typing
-            kotlinx.coroutines.delay(500)
-            println("Filter changed, triggering search") // Debug log
-            performSearch()
-        } catch (e: Exception) {
-            println("Error in filter effect: ${e.message}")
-            e.printStackTrace()
-        }
-    }
+        checkInViewModel.getScopedCheckIns(
+            authState = authState, // Memasukkan Scope Guru ke dalam Flow
+            nameFilter = nameFilter,
+            startDate = startDate?.format(dateFormatter) ?: "",
+            endDate = endDate?.format(dateFormatter) ?: "",
+            classId = selectedClass?.id,
+            subClassId = selectedSubClass?.id,
+            gradeId = selectedGrade?.id,
+            subGradeId = selectedSubGrade?.id,
+            programId = selectedProgram?.id,
+            roleId = selectedRole?.id
+        )
+    }.collectAsStateWithLifecycle(initialValue = emptyList())
+
+    val classOptions by optionsViewModel.classOptions.collectAsStateWithLifecycle(emptyList())
+    val subClassOptions by optionsViewModel.subClassOptions.collectAsStateWithLifecycle(emptyList())
+    val gradeOptions by optionsViewModel.gradeOptions.collectAsStateWithLifecycle(emptyList())
+    val subGradeOptions by optionsViewModel.subGradeOptions.collectAsStateWithLifecycle(emptyList())
+    val programOptions by optionsViewModel.programOptions.collectAsStateWithLifecycle(emptyList())
+    val roleOptions by optionsViewModel.roleOptions.collectAsStateWithLifecycle(emptyList())
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Check-in Records") },
-                actions = {
-                    IconButton(
-                        onClick = {
-                            val file = checkInViewModel.exportToPdf(records)
-                            context.showToast("PDF exported to ${file.name}")
-                        }
-                    ) {
-                        Icon(Icons.Default.PictureAsPdf, "Export to PDF")
-                    }
-                    IconButton(
-                        onClick = {
-                            val file = checkInViewModel.exportToCsv(records)
-                            context.showToast("CSV file exported to ${file.name}")
-                        }
-                    ) {
-                        Icon(Icons.Default.TableView, "Export to CSV")
-                    }
-                    IconButton(onClick = { showFilters = !showFilters }) {
-                        Icon(
-                            if (showFilters) Icons.Default.FilterList
-                            else Icons.Default.FilterListOff,
-                            "Toggle Filters"
+                title = { 
+                    Column {
+                        Text("Riwayat Absensi")
+                        Text(
+                            text = if (authState.role == "ADMIN") "Semua Data" else "Skop: ${authState.assignedClasses.joinToString(", ")}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary
                         )
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { 
+                        scope.launch {
+                            // ✅ FIX 3: Export juga mematuhi Scope
+                            val file = checkInViewModel.exportToPdf(records, authState)
+                            context.showToast("Export PDF: ${file.name}")
+                        }
+                    }) { Icon(Icons.Default.PictureAsPdf, null) }
+                    
+                    IconButton(onClick = { showFilters = !showFilters }) {
+                        Icon(if (showFilters) Icons.Default.FilterListOff else Icons.Default.FilterList, null)
                     }
                 }
             )
+        },
+        floatingActionButton = {
+            FloatingActionButton(onClick = { showManualDialog = true }) {
+                Icon(Icons.Default.Add, "Manual")
+            }
         }
     ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .padding(16.dp)
-        ) {
-            // Search bar with only one input and a search button
-            Row(
+        Column(modifier = Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
+            // SEARCH BAR
+            OutlinedTextField(
+                value = nameFilter,
+                onValueChange = { nameFilter = it },
+                label = { Text("Cari Nama Murid") },
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                OutlinedTextField(
-                    value = nameFilter,
-                    onValueChange = { nameFilter = it },
-                    label = { Text("Search by name") },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f),
-                    trailingIcon = if (nameFilter.isNotEmpty()) {
-                        {
-                            IconButton(onClick = { nameFilter = "" }) {
-                                Icon(Icons.Default.Clear, "Clear search")
-                            }
-                        }
-                    } else null
-                )
-                Button(
-                    onClick = performSearch,
-                    modifier = Modifier.height(56.dp),
-                    enabled = !isLoading
-                ) {
-                    if (isLoading) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(24.dp),
-                            color = MaterialTheme.colorScheme.onPrimary
-                        )
+                trailingIcon = { 
+                    if (nameFilter.isNotEmpty()) {
+                        IconButton(onClick = { nameFilter = "" }) { Icon(Icons.Default.Clear, null) }
                     } else {
-                        Icon(
-                            imageVector = Icons.Default.Search,
-                            contentDescription = "Search",
-                            modifier = Modifier.size(24.dp)
-                        )
+                        Icon(Icons.Default.Search, null) 
                     }
                 }
-            }
+            )
 
-            // Filters section
+            // FILTER SECTION
             if (showFilters) {
+                Spacer(modifier = Modifier.height(8.dp))
                 FilterSection(
-                    nameFilter = nameFilter,
-                    onNameFilterChange = { value -> nameFilter = value },
-                    onSearchClick = performSearch,
-                    startDate = startDate,
-                    onStartDateChange = { date -> startDate = date },
-                    endDate = endDate,
-                    onEndDateChange = { date -> endDate = date },
-                    classOptions = classOptions,
-                    selectedClass = selectedClass,
-                    onClassSelected = { option -> selectedClass = option },
-                    subClassOptions = subClassOptions.filter { it.parentClassId == selectedClass?.id },
-                    selectedSubClass = selectedSubClass,
-                    onSubClassSelected = { option -> selectedSubClass = option },
-                    gradeOptions = gradeOptions,
-                    selectedGrade = selectedGrade,
-                    onGradeSelected = { option -> selectedGrade = option },
-                    subGradeOptions = subGradeOptions.filter { it.parentGradeId == selectedGrade?.id },
-                    selectedSubGrade = selectedSubGrade,
-                    onSubGradeSelected = { option -> selectedSubGrade = option },
-                    programOptions = programOptions,
-                    selectedProgram = selectedProgram,
-                    onProgramSelected = { option -> selectedProgram = option },
-                    roleOptions = roleOptions,
-                    selectedRole = selectedRole,
-                    onRoleSelected = { option -> selectedRole = option }
+                    startDate = startDate, onStartDateChange = { startDate = it },
+                    endDate = endDate, onEndDateChange = { endDate = it },
+                    classOptions = classOptions, selectedClass = selectedClass, onClassSelected = { selectedClass = it },
+                    subClassOptions = subClassOptions, selectedSubClass = selectedSubClass, onSubClassSelected = { selectedSubClass = it },
+                    gradeOptions = gradeOptions, selectedGrade = selectedGrade, onGradeSelected = { selectedGrade = it },
+                    subGradeOptions = subGradeOptions, selectedSubGrade = selectedSubGrade, onSubGradeSelected = { selectedSubGrade = it },
+                    programOptions = programOptions, selectedProgram = selectedProgram, onProgramSelected = { selectedProgram = it },
+                    roleOptions = roleOptions, selectedRole = selectedRole, onRoleSelected = { selectedRole = it }
                 )
             }
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Records list with loading state
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-            ) {
-                if (isLoading) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.align(Alignment.Center)
-                    )
-                } else {
-                    // Filter out records for deleted users
-                    val validNames = allFaces.map { it.name }.toSet()
-                    val filteredRecords = records.filter { validNames.contains(it.name) }
-                    if (filteredRecords.isEmpty()) {
-                        Text(
-                            text = "No records found",
-                            style = MaterialTheme.typography.bodyLarge,
-                            modifier = Modifier.align(Alignment.Center)
+            // LIST RECORDS
+            if (records.isEmpty()) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text("Belum ada data absensi dalam skop Anda.", color = Color.Gray)
+                }
+            } else {
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(records) { record ->
+                        CheckInRecordCard(
+                            record = record,
+                            optionsViewModel = optionsViewModel,
+                            onLongClick = { recordToEdit = record }
                         )
-                    } else {
-                        LazyColumn(
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            items(filteredRecords) { record ->
-                                CheckInRecordCard(record = record)
-                            }
-                        }
                     }
                 }
             }
         }
-    // Initial search effect
-    LaunchedEffect(Unit) {
-        println("Initial search triggered") // Debug log
-        kotlinx.coroutines.delay(500) // Give time for ViewModels to initialize
-        performSearch()
-    }
-}} // End of CheckInRecordScreen
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+        // DIALOGS
+        if (showManualDialog || recordToEdit != null) {
+            ManualEntryDialog(
+                existingRecord = recordToEdit,
+                allStudents = scopedStudents, // ✅ Menggunakan murid yang sudah difilter skop
+                onDismiss = { 
+                    showManualDialog = false
+                    recordToEdit = null
+                },
+                onSave = { record ->
+                    if (recordToEdit != null) checkInViewModel.updateRecord(record)
+                    else checkInViewModel.addManualRecord(record)
+                    showManualDialog = false
+                    recordToEdit = null
+                },
+                onDelete = { record ->
+                    checkInViewModel.deleteRecord(record)
+                    recordToEdit = null
+                }
+            )
+        }
+    }
+}
+
+// --- KOMPONEN PENDUKUNG ---
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FilterSection(
-    nameFilter: String,
-    onNameFilterChange: (String) -> Unit,
-    onSearchClick: () -> Unit,
     startDate: LocalDate?,
     onStartDateChange: (LocalDate?) -> Unit,
     endDate: LocalDate?,
@@ -309,181 +225,56 @@ fun FilterSection(
     selectedRole: RoleOption?,
     onRoleSelected: (RoleOption?) -> Unit
 ) {
-    var showStartDatePicker by remember { mutableStateOf(false) }
-    var showEndDatePicker by remember { mutableStateOf(false) }
+    var showStartPicker by remember { mutableStateOf(false) }
+    var showEndPicker by remember { mutableStateOf(false) }
 
-    val startDateState = rememberDatePickerState()
-    val endDateState = rememberDatePickerState()
-
-    if (showStartDatePicker) {
+    // Date Picker Logic
+    if (showStartPicker) {
+        val dateState = rememberDatePickerState()
         DatePickerDialog(
-            onDismissRequest = { showStartDatePicker = false },
+            onDismissRequest = { showStartPicker = false },
             confirmButton = {
-                Button(onClick = {
-                    startDateState.selectedDateMillis?.let { millis ->
-                        val date = Instant.ofEpochMilli(millis)
-                            .atZone(ZoneId.systemDefault())
-                            .toLocalDate()
-                        onStartDateChange(date)
+                TextButton(onClick = {
+                    dateState.selectedDateMillis?.let {
+                        onStartDateChange(Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()).toLocalDate())
                     }
-                    showStartDatePicker = false
-                }) {
-                    Text("OK")
-                }
+                    showStartPicker = false
+                }) { Text("OK") }
             }
-        ) {
-            DatePicker(
-                state = startDateState,
-                showModeToggle = false
-            )
-        }
+        ) { DatePicker(state = dateState) }
     }
 
-    if (showEndDatePicker) {
+    if (showEndPicker) {
+        val dateState = rememberDatePickerState()
         DatePickerDialog(
-            onDismissRequest = { showEndDatePicker = false },
+            onDismissRequest = { showEndPicker = false },
             confirmButton = {
-                Button(onClick = {
-                    endDateState.selectedDateMillis?.let { millis ->
-                        val date = Instant.ofEpochMilli(millis)
-                            .atZone(ZoneId.systemDefault())
-                            .toLocalDate()
-                        // Only update if date is after start date
-                        if (startDate == null || !date.isBefore(startDate)) {
-                            onEndDateChange(date)
-                        }
+                TextButton(onClick = {
+                    dateState.selectedDateMillis?.let {
+                        onEndDateChange(Instant.ofEpochMilli(it).atZone(ZoneId.systemDefault()).toLocalDate())
                     }
-                    showEndDatePicker = false
-                }) {
-                    Text("OK")
-                }
+                    showEndPicker = false
+                }) { Text("OK") }
             }
-        ) {
-            DatePicker(
-                state = endDateState,
-                showModeToggle = false
-            )
-        }
+        ) { DatePicker(state = dateState) }
     }
 
-    Column(
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        // Name filter with search button
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            OutlinedTextField(
-                value = nameFilter,
-                onValueChange = onNameFilterChange,
-                label = { Text("Search by name") },
-                singleLine = true,
-                modifier = Modifier.weight(1f)
-            )
-            Button(
-                onClick = onSearchClick,
-                modifier = Modifier.align(Alignment.CenterVertically)
-            ) {
-                Icon(Icons.Default.Search, contentDescription = "Search")
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { showStartPicker = true }, modifier = Modifier.weight(1f)) {
+                Text(startDate?.toString() ?: "Tgl Mulai")
+            }
+            OutlinedButton(onClick = { showEndPicker = true }, modifier = Modifier.weight(1f)) {
+                Text(endDate?.toString() ?: "Tgl Selesai")
             }
         }
-
-        // Date filters
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            OutlinedButton(
-                onClick = { showStartDatePicker = true },
-                modifier = Modifier
-                    .weight(1f)
-                    .combinedClickable(
-                        onClick = { showStartDatePicker = true },
-                        onLongClick = { onStartDateChange(null) }
-                    )
-            ) {
-                Text(startDate?.format(dateFormatter) ?: "Start Date")
-                if (startDate != null) {
-                    Icon(
-                        Icons.Default.Clear,
-                        contentDescription = "Clear start date",
-                        modifier = Modifier.padding(start = 8.dp)
-                    )
-                }
-            }
-            OutlinedButton(
-                onClick = { showEndDatePicker = true },
-                modifier = Modifier
-                    .weight(1f)
-                    .combinedClickable(
-                        onClick = { showEndDatePicker = true },
-                        onLongClick = { onEndDateChange(null) }
-                    )
-            ) {
-                Text(endDate?.format(dateFormatter) ?: "End Date")
-                if (endDate != null) {
-                    Icon(
-                        Icons.Default.Clear,
-                        contentDescription = "Clear end date",
-                        modifier = Modifier.padding(start = 8.dp)
-                    )
-                }
-            }
-        }
-
-        // Dropdown filters
-        FilterDropdown(
-            label = "Class",
-            options = classOptions,
-            selectedOption = selectedClass,
-            onOptionSelected = onClassSelected,
-            getOptionLabel = { it.name }
-        )
-
+        
+        FilterDropdown("Kelas", classOptions, selectedClass, onClassSelected, { it.name })
         if (selectedClass != null) {
-            FilterDropdown(
-                label = "Sub Class",
-                options = subClassOptions,
-                selectedOption = selectedSubClass,
-                onOptionSelected = onSubClassSelected,
-                getOptionLabel = { it.name }
-            )
+            FilterDropdown("Sub Kelas", subClassOptions.filter { it.parentClassId == selectedClass.id }, selectedSubClass, onSubClassSelected, { it.name })
         }
-
-        FilterDropdown(
-            label = "Grade",
-            options = gradeOptions,
-            selectedOption = selectedGrade,
-            onOptionSelected = onGradeSelected,
-            getOptionLabel = { it.name }
-        )
-
-        if (selectedGrade != null) {
-            FilterDropdown(
-                label = "Sub Grade",
-                options = subGradeOptions,
-                selectedOption = selectedSubGrade,
-                onOptionSelected = onSubGradeSelected,
-                getOptionLabel = { it.name }
-            )
-        }
-
-        FilterDropdown(
-            label = "Program",
-            options = programOptions,
-            selectedOption = selectedProgram,
-            onOptionSelected = onProgramSelected,
-            getOptionLabel = { it.name }
-        )
-
-        FilterDropdown(
-            label = "Role",
-            options = roleOptions,
-            selectedOption = selectedRole,
-            onOptionSelected = onRoleSelected,
-            getOptionLabel = { it.name }
-        )
+        FilterDropdown("Grade", gradeOptions, selectedGrade, onGradeSelected, { it.name })
+        FilterDropdown("Program", programOptions, selectedProgram, onProgramSelected, { it.name })
     }
 }
 
@@ -497,159 +288,149 @@ fun <T> FilterDropdown(
     getOptionLabel: (T) -> String
 ) {
     var expanded by remember { mutableStateOf(false) }
-
     Box(modifier = Modifier.fillMaxWidth()) {
         OutlinedTextField(
             value = selectedOption?.let { getOptionLabel(it) } ?: "",
             onValueChange = {},
             label = { Text(label) },
             readOnly = true,
-            trailingIcon = {
-                IconButton(onClick = { expanded = !expanded }) {
-                    Icon(
-                        if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                        contentDescription = "Select $label"
-                    )
-                }
-            },
+            trailingIcon = { IconButton(onClick = { expanded = !expanded }) { Icon(Icons.Default.ArrowDropDown, null) } },
             modifier = Modifier.fillMaxWidth()
         )
-
-        DropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false },
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            DropdownMenuItem(
-                text = { Text("All") },
-                onClick = {
-                    onOptionSelected(null)
-                    expanded = false
-                }
-            )
-            options.forEach { option ->
-                DropdownMenuItem(
-                    text = { Text(getOptionLabel(option)) },
-                    onClick = {
-                        onOptionSelected(option)
-                        expanded = false
-                    }
-                )
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(text = { Text("Semua") }, onClick = { onOptionSelected(null); expanded = false })
+            options.forEach { opt ->
+                DropdownMenuItem(text = { Text(getOptionLabel(opt)) }, onClick = { onOptionSelected(opt); expanded = false })
             }
         }
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun CheckInRecordCard(
-    record: CheckInRecord,
-    optionsViewModel: OptionsViewModel = viewModel()
+    record: CheckInRecord, 
+    optionsViewModel: OptionsViewModel, 
+    onLongClick: () -> Unit
 ) {
-    // Collect the current values of all option lists
-    val classOptions by optionsViewModel.classOptions.collectAsStateWithLifecycle(initialValue = emptyList())
-    val subClassOptions by optionsViewModel.subClassOptions.collectAsStateWithLifecycle(initialValue = emptyList())
-    val gradeOptions by optionsViewModel.gradeOptions.collectAsStateWithLifecycle(initialValue = emptyList())
-    val subGradeOptions by optionsViewModel.subGradeOptions.collectAsStateWithLifecycle(initialValue = emptyList())
-    val programOptions by optionsViewModel.programOptions.collectAsStateWithLifecycle(initialValue = emptyList())
-    val roleOptions by optionsViewModel.roleOptions.collectAsStateWithLifecycle(initialValue = emptyList())
-
-    // Find display names from IDs
+    val classOptions by optionsViewModel.classOptions.collectAsStateWithLifecycle(emptyList())
     val className = remember(record.classId, classOptions) {
-        record.classId?.let { id -> classOptions.find { it.id == id }?.name }
+        record.classId?.let { id -> classOptions.find { it.id == id }?.name } ?: record.className
     }
-    val subClassName = remember(record.subClassId, subClassOptions) {
-        record.subClassId?.let { id -> subClassOptions.find { it.id == id }?.name }
-    }
+    val gradeOptions by optionsViewModel.gradeOptions.collectAsStateWithLifecycle(emptyList())
     val gradeName = remember(record.gradeId, gradeOptions) {
-        record.gradeId?.let { id -> gradeOptions.find { it.id == id }?.name }
-    }
-    val subGradeName = remember(record.subGradeId, subGradeOptions) {
-        record.subGradeId?.let { id -> subGradeOptions.find { it.id == id }?.name }
-    }
-    val programName = remember(record.programId, programOptions) {
-        record.programId?.let { id -> programOptions.find { it.id == id }?.name }
-    }
-    val roleName = remember(record.roleId, roleOptions) {
-        record.roleId?.let { id -> roleOptions.find { it.id == id }?.name }
+        record.gradeId?.let { id -> gradeOptions.find { it.id == id }?.name } ?: record.gradeName
     }
 
     Card(
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier.fillMaxWidth().combinedClickable(onClick = {}, onLongClick = onLongClick)
     ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            // Primary Info
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+        Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Surface(color = getStatusColor(record.status), shape = CircleShape, modifier = Modifier.size(42.dp)) {
+                Box(contentAlignment = Alignment.Center) {
+                    Text(record.status.take(1), color = Color.White, fontWeight = FontWeight.Bold)
+                }
+            }
+            Spacer(Modifier.width(16.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(record.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                
+                val details = listOfNotNull(className, gradeName).joinToString(" - ")
+                if (details.isNotEmpty()) {
+                    Text(details, style = MaterialTheme.typography.bodySmall)
+                }
+                
                 Text(
-                    text = record.name,
-                    style = MaterialTheme.typography.titleMedium
-                )
-                Text(
-                    text = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss").format(record.timestamp),
-                    style = MaterialTheme.typography.bodyMedium,
+                    record.timestamp.format(DateTimeFormatter.ofPattern("HH:mm - dd MMM yyyy")),
+                    style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
+            if (record.faceId == null) Icon(Icons.Default.EditNote, null, tint = Color.Gray)
+        }
+    }
+}
 
-            Spacer(modifier = Modifier.height(8.dp))
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ManualEntryDialog(
+    existingRecord: CheckInRecord?,
+    allStudents: List<FaceEntity>,
+    onDismiss: () -> Unit,
+    onSave: (CheckInRecord) -> Unit,
+    onDelete: (CheckInRecord) -> Unit
+) {
+    var selectedStudent by remember { mutableStateOf(allStudents.find { it.name == existingRecord?.name }) }
+    var status by remember { mutableStateOf(existingRecord?.status ?: "PRESENT") }
+    val statusOptions = listOf("PRESENT", "SAKIT", "IZIN", "ALPHA")
 
-            // Student Details in a Grid
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    // Class Information
-                    className?.let {
-                        Text(
-                            text = "Class: $it",
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (existingRecord == null) "Absen Manual" else "Edit Absensi") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (existingRecord == null) {
+                    if (allStudents.isEmpty()) {
+                        Text("⚠️ Belum ada data murid dalam skop Anda.", color = MaterialTheme.colorScheme.error)
+                    } else {
+                        FilterDropdown("Pilih Murid", allStudents, selectedStudent, { selectedStudent = it }, { it.name })
                     }
-                    subClassName?.let { sub ->
-                        Text(
-                            text = "Sub-Class: $sub",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    gradeName?.let {
-                        Text(
-                            text = "Grade: $it",
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                    }
+                } else {
+                    Text("Murid: ${existingRecord.name}", fontWeight = FontWeight.Bold)
                 }
-
-                Column(modifier = Modifier.weight(1f)) {
-                    // Additional Details
-                    subGradeName?.let { sub ->
-                        Text(
-                            text = "Sub-Grade: $sub",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    programName?.let {
-                        Text(
-                            text = "Program: $it",
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                    }
-                    roleName?.let {
-                        Text(
-                            text = "Role: $it",
-                            style = MaterialTheme.typography.bodyMedium
+                
+                Text("Status:")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    statusOptions.forEach { opt ->
+                        FilterChip(
+                            selected = status == opt,
+                            onClick = { status = opt },
+                            label = { Text(opt.take(1)) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = getStatusColor(opt).copy(alpha = 0.2f),
+                                selectedLabelColor = getStatusColor(opt)
+                            )
                         )
                     }
                 }
             }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val record = existingRecord?.copy(status = status) ?: CheckInRecord(
+                        name = selectedStudent?.name ?: "Unknown",
+                        timestamp = LocalDateTime.now(),
+                        faceId = null,
+                        status = status,
+                        classId = selectedStudent?.classId,
+                        subClassId = selectedStudent?.subClassId,
+                        gradeId = selectedStudent?.gradeId,
+                        subGradeId = selectedStudent?.subGradeId,
+                        programId = selectedStudent?.programId,
+                        roleId = selectedStudent?.roleId,
+                        className = selectedStudent?.className,
+                        gradeName = selectedStudent?.grade
+                    )
+                    onSave(record)
+                },
+                enabled = selectedStudent != null || existingRecord != null
+            ) { Text("Simpan") }
+        },
+        dismissButton = {
+            if (existingRecord != null) {
+                TextButton(onClick = { onDelete(existingRecord) }) { Text("Hapus", color = MaterialTheme.colorScheme.error) }
+            } else {
+                TextButton(onClick = onDismiss) { Text("Batal") }
+            }
         }
-    }
+    )
+}
+
+fun getStatusColor(status: String): Color = when (status) {
+    "PRESENT" -> Color(0xFF4CAF50)
+    "SAKIT" -> Color(0xFFFFC107)
+    "IZIN" -> Color(0xFF2196F3)
+    "ALPHA" -> Color(0xFFF44336)
+    else -> Color.Gray
 }

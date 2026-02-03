@@ -31,11 +31,13 @@ fun AuthScreen(viewModel: AuthViewModel) {
         modifier = Modifier.fillMaxSize().padding(24.dp),
         contentAlignment = Alignment.Center
     ) {
-        when (state) {
+        // Gunakan variabel lokal 'currentState' agar smart casting Kotlin bekerja maksimal
+        val currentState = state
+
+        when (currentState) {
             is AuthState.Loading -> CircularProgressIndicator()
             
             is AuthState.StatusWaiting -> {
-                // Tampilan saat user menunggu Aktivasi Admin
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(Icons.Default.Lock, null, modifier = Modifier.size(60.dp), tint = MaterialTheme.colorScheme.primary)
                     Spacer(modifier = Modifier.height(16.dp))
@@ -43,20 +45,22 @@ fun AuthScreen(viewModel: AuthViewModel) {
                     Spacer(modifier = Modifier.height(8.dp))
                     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
                         Text(
-                            text = (state as AuthState.StatusWaiting).message,
+                            text = currentState.message, // ✅ Smart cast bekerja di sini
                             modifier = Modifier.padding(16.dp),
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                     Spacer(modifier = Modifier.height(24.dp))
-                    Button(onClick = { viewModel.logout() }, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) {
+                    Button(
+                        onClick = { viewModel.logout() }, 
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                    ) {
                         Text("Logout")
                     }
                 }
             }
             
             else -> {
-                // Form Login / Register
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
                         text = if (isRegisterMode) "Registrasi Baru" else "Azura Login",
@@ -65,9 +69,10 @@ fun AuthScreen(viewModel: AuthViewModel) {
                     )
                     Spacer(modifier = Modifier.height(32.dp))
 
-                    if (state is AuthState.Error) {
+                    // Tampilkan error jika ada
+                    if (currentState is AuthState.Error) {
                         Text(
-                            text = (state as AuthState.Error).message,
+                            text = currentState.message,
                             color = MaterialTheme.colorScheme.error,
                             modifier = Modifier.padding(bottom = 16.dp)
                         )
@@ -99,7 +104,6 @@ fun AuthScreen(viewModel: AuthViewModel) {
                         modifier = Modifier.fillMaxWidth()
                     )
 
-                    // Tombol Lupa Password
                     if (!isRegisterMode) {
                         Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
                             TextButton(onClick = { viewModel.sendPasswordReset(email) }) {
@@ -122,7 +126,10 @@ fun AuthScreen(viewModel: AuthViewModel) {
                     }
 
                     Spacer(modifier = Modifier.height(16.dp))
-                    TextButton(onClick = { isRegisterMode = !isRegisterMode }) {
+                    TextButton(onClick = { 
+                        isRegisterMode = !isRegisterMode 
+                        // Reset error state saat pindah mode agar tidak mengganggu
+                    }) {
                         Text(if (isRegisterMode) "Sudah punya akun? Login" else "Belum punya akun? Daftar")
                     }
                 }

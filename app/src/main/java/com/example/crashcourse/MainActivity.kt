@@ -5,27 +5,30 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.example.crashcourse.ml.FaceRecognizer
 import com.example.crashcourse.ui.MainScreen
-import com.example.crashcourse.ui.auth.AuthScreen // ✅ AuthScreen Baru
+import com.example.crashcourse.ui.auth.AuthScreen
 import com.example.crashcourse.ui.theme.CrashcourseTheme
 import com.example.crashcourse.viewmodel.AuthState
-import com.example.crashcourse.viewmodel.AuthViewModel // ✅ AuthViewModel Baru
-
+import com.example.crashcourse.viewmodel.AuthViewModel
+import androidx.compose.material.icons.filled.Warning // Untuk StatusWaitingScreen
 class MainActivity : ComponentActivity() {
 
-    // 1. Inisialisasi AuthViewModel sebagai pusat kendali akses
     private val authViewModel: AuthViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Konfigurasi tampilan penuh (Edge-to-Edge)
         enableEdgeToEdge()
         WindowCompat.setDecorFitsSystemWindows(window, false)
         val windowInsetsController = WindowCompat.getInsetsController(window, window.decorView)
@@ -34,7 +37,6 @@ class MainActivity : ComponentActivity() {
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
 
-        // 2. Inisialisasi Engine AI Wajah
         try {
             FaceRecognizer.initialize(applicationContext)
         } catch (e: Exception) {
@@ -43,22 +45,41 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             CrashcourseTheme {
-                // 3. Pantau status autentikasi secara Real-time
+                // Pantau status autentikasi
                 val authState by authViewModel.authState.collectAsState()
 
-                
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background
+                ) {
+                    when (val state = authState) {
+                        is AuthState.Active -> {
+                            // ✅ Kirim state 'state' (yang sudah di-cast otomatis jadi Active) ke MainScreen
+                            MainScreen(
+                                authState = state, 
+                                onLogout = { authViewModel.logout() }
+                            )
+                        }
+                        
+                        is AuthState.StatusWaiting -> {
+                            // ⏳ Tampilkan layar tunggu (Pending/Banned/Expired)
+                            StatusWaitingScreen(
+                                message = state.message,
+                                onLogout = { authViewModel.logout() }
+                            )
+                        }
 
-                when (authState) {
-                    is AuthState.Active -> {
-                        // ✅ STATUS AKTIF: Tampilkan Aplikasi Utama
-                        // Kita berikan fungsi logout agar bisa dipanggil dari dalam Settings
-                        MainScreen(
-                            onLogout = { authViewModel.logout() }
-                        )
-                    }
-                    else -> {
-                        // ⛔ BELUM LOGIN / PENDING / ERROR: Tampilkan AuthScreen
-                        AuthScreen(viewModel = authViewModel)
+                        is AuthState.Loading, is AuthState.Checking -> {
+                            // 🔄 Layar Loading saat cek database
+                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator()
+                            }
+                        }
+
+                        else -> {
+                            // ⛔ LoggedOut atau Error: Tampilkan layar Login/Register
+                            AuthScreen(viewModel = authViewModel)
+                        }
                     }
                 }
             }
@@ -67,7 +88,38 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        // Bersihkan resource AI saat aplikasi ditutup
         FaceRecognizer.close()
+    }
+}
+
+/**
+ * Layar khusus untuk menangani status PENDING, BANNED, atau EXPIRED.
+ * Agar user tidak bisa masuk ke menu utama tapi tetap bisa Logout.
+ */
+@Composable
+fun StatusWaitingScreen(message: String, onLogout: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Icon(
+           imageVector = androidx.compose.material.icons.Icons.Default.Warning,
+            contentDescription = null,
+            modifier = Modifier.size(64.dp),
+            tint = MaterialTheme.colorScheme.primary
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+        Text(
+            text = message,
+            textAlign = TextAlign.Center,
+            style = MaterialTheme.typography.bodyLarge
+        )
+        Spacer(modifier = Modifier.height(32.dp))
+        Button(onClick = onLogout) {
+            Text("Kembali ke Login / Ganti Akun")
+        }
     }
 }

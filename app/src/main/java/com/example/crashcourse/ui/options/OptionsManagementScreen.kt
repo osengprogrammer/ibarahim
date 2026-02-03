@@ -13,8 +13,9 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.crashcourse.viewmodel.OptionsViewModel
+import com.example.crashcourse.db.*
 
-// Import helper functions
+// Import helper functions secara eksplisit
 import com.example.crashcourse.ui.OptionsHelpers.getName
 import com.example.crashcourse.ui.OptionsHelpers.getOrder
 import com.example.crashcourse.ui.OptionsHelpers.getParentId
@@ -26,12 +27,17 @@ import com.example.crashcourse.ui.OptionsHelpers.getId
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun OptionsManagementScreen(
-    viewModel: OptionsViewModel = viewModel(),
-    onNavigateBack: () -> Unit // Menambah navigasi balik
+    viewModel: OptionsViewModel = viewModel()
 ) {
     var selectedOptionType by remember { mutableStateOf("Class") }
     var expanded by remember { mutableStateOf(false) }
     val optionTypes = listOf("Class", "SubClass", "Grade", "SubGrade", "Program", "Role")
+
+    // State untuk Dialog Tambah Data
+    var showAddDialog by remember { mutableStateOf(false) }
+    var newName by remember { mutableStateOf("") }
+    var newOrder by remember { mutableStateOf("0") }
+    var newParentId by remember { mutableStateOf<Int?>(null) }
 
     // Collect lists dari database Room
     val classOptions by viewModel.classOptions.collectAsStateWithLifecycle(emptyList())
@@ -57,86 +63,120 @@ fun OptionsManagementScreen(
         else -> emptyList()
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Kelola Data Master") },
-                navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Kembali")
-                    }
-                }
-            )
-        }
-    ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .padding(16.dp)
-        ) {
-            // Dropdown untuk pilih tipe data (Kelas, Jurusan, dll)
-            Box(modifier = Modifier.fillMaxWidth()) {
-                OutlinedTextField(
-                    value = selectedOptionType,
-                    onValueChange = {},
-                    readOnly = true,
-                    label = { Text("Pilih Tipe Data") },
-                    trailingIcon = {
-                        IconButton(onClick = { expanded = !expanded }) {
-                            Icon(Icons.Filled.ArrowDropDown, contentDescription = null)
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                DropdownMenu(
-                    expanded = expanded,
-                    onDismissRequest = { expanded = false },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    optionTypes.forEach { type ->
-                        DropdownMenuItem(
-                            text = { Text(type) },
-                            onClick = {
-                                selectedOptionType = type
-                                expanded = false
-                            }
-                        )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // List data yang bisa di-edit secara inline
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(options) { option ->
-                    ExpandableOptionCard(
-                        option = option,
-                        parentOptions = parentOptions,
-                        onSave = { updated ->
-                            val parentId = when (selectedOptionType) {
-                                "SubClass" -> getParentId(updated) ?: 1
-                                "SubGrade" -> getParentId(updated) ?: 1
-                                else -> null
-                            }
-                            viewModel.updateOption(
-                                selectedOptionType,
-                                updated,
-                                getName(updated),
-                                getOrder(updated),
-                                parentId
-                            )
-                        },
-                        onDelete = { viewModel.deleteOption(selectedOptionType, it) }
+    // --- DIALOG TAMBAH DATA BARU ---
+    if (showAddDialog) {
+        AlertDialog(
+            onDismissRequest = { showAddDialog = false },
+            title = { Text("Tambah $selectedOptionType Baru") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = newName,
+                        onValueChange = { newName = it },
+                        label = { Text("Nama $selectedOptionType") },
+                        modifier = Modifier.fillMaxWidth()
                     )
+                    OutlinedTextField(
+                        value = newOrder,
+                        onValueChange = { newOrder = it },
+                        label = { Text("Urutan Tampilan") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    if (selectedOptionType == "SubClass" || selectedOptionType == "SubGrade") {
+                        var parentExpanded by remember { mutableStateOf(false) }
+                        Box(modifier = Modifier.fillMaxWidth()) {
+                            OutlinedTextField(
+                                value = parentOptions.find { getId(it) == newParentId }?.let { getName(it) } ?: "Pilih Parent",
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text("Pilih Parent") },
+                                trailingIcon = {
+                                    IconButton(onClick = { parentExpanded = !parentExpanded }) {
+                                        Icon(Icons.Default.ArrowDropDown, null)
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            DropdownMenu(
+                                expanded = parentExpanded,
+                                onDismissRequest = { parentExpanded = false }
+                            ) {
+                                parentOptions.forEach { p ->
+                                    DropdownMenuItem(
+                                        text = { Text(getName(p)) },
+                                        onClick = {
+                                            newParentId = getId(p)
+                                            parentExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (newName.isNotBlank()) {
+                            viewModel.addOption(selectedOptionType, newName, newOrder.toIntOrNull() ?: 0, newParentId)
+                            newName = ""; newOrder = "0"; newParentId = null
+                            showAddDialog = false
+                        }
+                    }
+                ) { Text("Simpan") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddDialog = false }) { Text("Batal") }
+            }
+        )
+    }
+
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+        Text(text = "Kelola Data Master", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.padding(bottom = 16.dp))
+
+        Box(modifier = Modifier.fillMaxWidth()) {
+            OutlinedTextField(
+                value = selectedOptionType,
+                onValueChange = {},
+                readOnly = true,
+                label = { Text("Pilih Tipe Data") },
+                trailingIcon = { IconButton(onClick = { expanded = !expanded }) { Icon(Icons.Filled.ArrowDropDown, null) } },
+                modifier = Modifier.fillMaxWidth()
+            )
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, modifier = Modifier.fillMaxWidth()) {
+                optionTypes.forEach { type ->
+                    DropdownMenuItem(text = { Text(type) }, onClick = { selectedOptionType = type; expanded = false })
                 }
             }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.weight(1f)) {
+            items(options, key = { getId(it) }) { option ->
+                // ✅ FITUR YANG TADI HILANG SUDAH DITAMBAHKAN DI BAWAH
+                ExpandableOptionCard(
+                    option = option,
+                    parentOptions = parentOptions,
+                    onSave = { updated ->
+                        viewModel.updateOption(selectedOptionType, updated, getName(updated), getOrder(updated), getParentId(updated))
+                    },
+                    onDelete = { viewModel.deleteOption(selectedOptionType, it) }
+                )
+            }
+        }
+        
+        Button(onClick = { showAddDialog = true }, modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+            Icon(Icons.Default.Add, null)
+            Spacer(Modifier.width(8.dp))
+            Text("Tambah $selectedOptionType Baru")
         }
     }
 }
 
+// ✅ BERIKUT ADALAH FUNGSI YANG TADI UNRESOLVED (DITAMBAHKAN KEMBALI)
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ExpandableOptionCard(
@@ -148,13 +188,16 @@ fun ExpandableOptionCard(
     var isExpanded by remember { mutableStateOf(false) }
     var dropdownExpanded by remember { mutableStateOf(false) }
 
-    var name by remember { mutableStateOf(getName(option)) }
-    var order by remember { mutableStateOf(getOrder(option).toString()) }
-    var parentId by remember { mutableStateOf(getParentId(option) ?: 1) }
+    var name by remember(option) { mutableStateOf(getName(option)) }
+    var order by remember(option) { mutableStateOf(getOrder(option).toString()) }
+    var parentId by remember(option) { mutableStateOf(getParentId(option) ?: 1) }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
-        onClick = { isExpanded = !isExpanded }
+        onClick = { isExpanded = !isExpanded },
+        colors = CardDefaults.cardColors(
+            containerColor = if (isExpanded) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surface
+        )
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(
@@ -162,36 +205,30 @@ fun ExpandableOptionCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text(getName(option), style = MaterialTheme.typography.titleMedium)
-                Icon(
-                    imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                    contentDescription = null
-                )
+                Column {
+                    Text(getName(option), style = MaterialTheme.typography.titleMedium)
+                    Text("Urutan: ${getOrder(option)}", style = MaterialTheme.typography.bodySmall)
+                }
+                Icon(imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore, contentDescription = null)
             }
 
             if (isExpanded) {
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(12.dp))
                 OutlinedTextField(
                     value = name,
-                    onValueChange = { 
-                        name = it
-                        onSave(setName(option, it))
-                    },
+                    onValueChange = { name = it; onSave(setName(option, it)) },
                     label = { Text("Nama") },
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
                 )
-
                 Spacer(modifier = Modifier.height(8.dp))
                 OutlinedTextField(
                     value = order,
-                    onValueChange = { 
-                        order = it
-                        onSave(setOrder(option, it.toIntOrNull() ?: 0))
-                    },
+                    onValueChange = { order = it; onSave(setOrder(option, it.toIntOrNull() ?: 0)) },
                     label = { Text("Urutan (Order)") },
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true
                 )
-
                 if (parentOptions.isNotEmpty()) {
                     Spacer(modifier = Modifier.height(8.dp))
                     Box(modifier = Modifier.fillMaxWidth()) {
@@ -200,18 +237,10 @@ fun ExpandableOptionCard(
                             onValueChange = {},
                             readOnly = true,
                             label = { Text("Induk (Parent)") },
-                            trailingIcon = {
-                                IconButton(onClick = { dropdownExpanded = !dropdownExpanded }) {
-                                    Icon(Icons.Default.ArrowDropDown, null)
-                                }
-                            },
+                            trailingIcon = { IconButton(onClick = { dropdownExpanded = !dropdownExpanded }) { Icon(Icons.Default.ArrowDropDown, null) } },
                             modifier = Modifier.fillMaxWidth()
                         )
-
-                        DropdownMenu(
-                            expanded = dropdownExpanded,
-                            onDismissRequest = { dropdownExpanded = false }
-                        ) {
+                        DropdownMenu(expanded = dropdownExpanded, onDismissRequest = { dropdownExpanded = false }) {
                             parentOptions.forEach { parent ->
                                 DropdownMenuItem(
                                     text = { Text(getName(parent)) },
@@ -225,16 +254,11 @@ fun ExpandableOptionCard(
                         }
                     }
                 }
-
-                Spacer(modifier = Modifier.height(12.dp))
-                Button(
-                    onClick = { onDelete(option) },
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                    modifier = Modifier.align(Alignment.End)
-                ) {
-                    Icon(Icons.Default.Delete, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("Hapus")
+                Spacer(modifier = Modifier.height(16.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = { onDelete(option) }, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) {
+                        Icon(Icons.Default.Delete, null); Spacer(Modifier.width(4.dp)); Text("Hapus")
+                    }
                 }
             }
         }

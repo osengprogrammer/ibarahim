@@ -17,7 +17,7 @@ import androidx.room.TypeConverters
         FaceEntity::class,
         CheckInRecord::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = true
 )
 @TypeConverters(Converters::class)

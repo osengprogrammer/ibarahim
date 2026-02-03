@@ -6,33 +6,43 @@ import java.time.LocalDateTime
 
 @Dao
 interface CheckInRecordDao {
+
+    // --- 1. AMBIL SEMUA DATA (Sederhana untuk Debug) ---
     @Query("SELECT * FROM check_in_records ORDER BY timestamp DESC")
     fun getAllRecords(): Flow<List<CheckInRecord>>
 
+    // --- 2. QUERY FILTER SAKTI (Optimized for Null Safety) ---
+    /**
+     * Zohar menggunakan logika (column = :param OR :param IS NULL) 
+     * karena ini jauh lebih stabil di SQLite saat menangani TypeConverters Long.
+     */
     @Query("""
         SELECT * FROM check_in_records 
-        WHERE (:nameFilter = '' OR name LIKE '%' || :nameFilter || '%')
-        AND (:startDate IS NULL OR timestamp >= :startDate)
-        AND (:endDate IS NULL OR timestamp <= :endDate)
-        AND (:classId IS NULL OR classId = :classId)
-        AND (:subClassId IS NULL OR subClassId = :subClassId)
-        AND (:gradeId IS NULL OR gradeId = :gradeId)
-        AND (:subGradeId IS NULL OR subGradeId = :subGradeId)
-        AND (:programId IS NULL OR programId = :programId)
-        AND (:roleId IS NULL OR roleId = :roleId)
+        WHERE 
+            (name LIKE '%' || :nameFilter || '%' OR :nameFilter = '')
+            AND (timestamp >= :startDate OR :startDate IS NULL)
+            AND (timestamp <= :endDate OR :endDate IS NULL)
+            AND (classId = :classId OR :classId IS NULL)
+            AND (subClassId = :subClassId OR :subClassId IS NULL)
+            AND (gradeId = :gradeId OR :gradeId IS NULL)
+            AND (subGradeId = :subGradeId OR :subGradeId IS NULL)
+            AND (programId = :programId OR :programId IS NULL)
+            AND (roleId = :roleId OR :roleId IS NULL)
         ORDER BY timestamp DESC
     """)
     fun getFilteredRecords(
-        nameFilter: String = "",
-        startDate: LocalDateTime? = null,
-        endDate: LocalDateTime? = null,
-        classId: Int? = null,
-        subClassId: Int? = null,
-        gradeId: Int? = null,
-        subGradeId: Int? = null,
-        programId: Int? = null,
-        roleId: Int? = null
+        nameFilter: String,
+        startDate: LocalDateTime?,
+        endDate: LocalDateTime?,
+        classId: Int?,
+        subClassId: Int?,
+        gradeId: Int?,
+        subGradeId: Int?,
+        programId: Int?,
+        roleId: Int?
     ): Flow<List<CheckInRecord>>
+
+    // --- 3. OPERASI CRUD ---
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(record: CheckInRecord)
@@ -42,4 +52,8 @@ interface CheckInRecordDao {
 
     @Delete
     suspend fun delete(record: CheckInRecord)
+
+    // Helper untuk membersihkan riwayat jika diperlukan
+    @Query("DELETE FROM check_in_records")
+    suspend fun deleteAllRecords()
 }
