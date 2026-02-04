@@ -14,6 +14,8 @@ import androidx.navigation.navArgument
 import com.example.crashcourse.ui.*
 import com.example.crashcourse.viewmodel.AuthState
 import com.example.crashcourse.viewmodel.AuthViewModel
+// Pastikan baris ini ada dan benar alamatnya
+import com.example.crashcourse.ui.checkin.CheckInRecordScreen
 
 sealed class Screen(val route: String) {
     object CheckIn           : Screen("check_in")
@@ -142,6 +144,14 @@ fun NavGraphBuilder.addAppManagementGraph(
             }
         )
     }
+
+    // Di dalam NavGraph.kt -> fun addAppManagementGraph
+// 🔥 TAMBAHKAN RUTE INI:
+composable(Screen.LiveMonitor.route) {
+    LiveAttendanceScreen(
+        onBack = { navController.popBackStack() }
+    )
+}
 }
 
 @Composable

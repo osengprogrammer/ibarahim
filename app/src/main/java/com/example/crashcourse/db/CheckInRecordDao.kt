@@ -7,22 +7,20 @@ import java.time.LocalDateTime
 @Dao
 interface CheckInRecordDao {
 
-    // --- 1. AMBIL SEMUA DATA (Sederhana untuk Debug) ---
     @Query("SELECT * FROM check_in_records ORDER BY timestamp DESC")
     fun getAllRecords(): Flow<List<CheckInRecord>>
 
-    // --- 2. QUERY FILTER SAKTI (Optimized for Null Safety) ---
-    /**
-     * Zohar menggunakan logika (column = :param OR :param IS NULL) 
-     * karena ini jauh lebih stabil di SQLite saat menangani TypeConverters Long.
-     */
     @Query("""
         SELECT * FROM check_in_records 
         WHERE 
             (name LIKE '%' || :nameFilter || '%' OR :nameFilter = '')
             AND (timestamp >= :startDate OR :startDate IS NULL)
             AND (timestamp <= :endDate OR :endDate IS NULL)
+            -- Filter ID (Untuk akurasi data master)
             AND (classId = :classId OR :classId IS NULL)
+            -- 🔥 TAMBAHAN: Filter Nama (Penyelamat jika ID kosong)
+            AND (className = :className OR :className IS NULL OR :className = '')
+            
             AND (subClassId = :subClassId OR :subClassId IS NULL)
             AND (gradeId = :gradeId OR :gradeId IS NULL)
             AND (subGradeId = :subGradeId OR :subGradeId IS NULL)
@@ -35,14 +33,13 @@ interface CheckInRecordDao {
         startDate: LocalDateTime?,
         endDate: LocalDateTime?,
         classId: Int?,
+        className: String?, // ✅ Tambahkan parameter ini
         subClassId: Int?,
         gradeId: Int?,
         subGradeId: Int?,
         programId: Int?,
         roleId: Int?
     ): Flow<List<CheckInRecord>>
-
-    // --- 3. OPERASI CRUD ---
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(record: CheckInRecord)
@@ -52,8 +49,4 @@ interface CheckInRecordDao {
 
     @Delete
     suspend fun delete(record: CheckInRecord)
-
-    // Helper untuk membersihkan riwayat jika diperlukan
-    @Query("DELETE FROM check_in_records")
-    suspend fun deleteAllRecords()
 }

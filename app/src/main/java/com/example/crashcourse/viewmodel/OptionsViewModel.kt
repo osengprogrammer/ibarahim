@@ -5,9 +5,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.crashcourse.db.*
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
-
 
 class OptionsViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -19,50 +18,56 @@ class OptionsViewModel(application: Application) : AndroidViewModel(application)
     private val programOptionDao = database.programOptionDao()
     private val roleOptionDao = database.roleOptionDao()
 
-    val classOptions: Flow<List<ClassOption>> = classOptionDao.getAllOptions()
-    val subClassOptions: Flow<List<SubClassOption>> = subClassOptionDao.getAllOptions()
-    val gradeOptions: Flow<List<GradeOption>> = gradeOptionDao.getAllOptions()
-    val subGradeOptions: Flow<List<SubGradeOption>> = subGradeOptionDao.getAllOptions()
-    val programOptions: Flow<List<ProgramOption>> = programOptionDao.getAllOptions()
-    val roleOptions: Flow<List<RoleOption>> = roleOptionDao.getAllOptions()
+    // --- 🔥 REAKTIF: Convert Flow ke StateFlow ---
+    // Gunakan WhileSubscribed(5000) agar database berhenti bekerja saat aplikasi di background
+    
+    val classOptions: StateFlow<List<ClassOption>> = classOptionDao.getAllOptions()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val subClassOptions: StateFlow<List<SubClassOption>> = subClassOptionDao.getAllOptions()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val gradeOptions: StateFlow<List<GradeOption>> = gradeOptionDao.getAllOptions()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val subGradeOptions: StateFlow<List<SubGradeOption>> = subGradeOptionDao.getAllOptions()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val programOptions: StateFlow<List<ProgramOption>> = programOptionDao.getAllOptions()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val roleOptions: StateFlow<List<RoleOption>> = roleOptionDao.getAllOptions()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // --- 📝 CRUD OPERATIONS ---
 
     fun addOption(optionType: String, name: String, displayOrder: Int, parentId: Int? = null) {
         viewModelScope.launch(Dispatchers.IO) {
             when (optionType) {
                 "Class" -> {
+                    // Tip: Jika Brother pakai autoGenerate = true, set id = 0 saja
                     val maxId = classOptionDao.getMaxId() ?: 0
-                    val newOption = ClassOption(id = maxId + 1, name, displayOrder)
-                    classOptionDao.insert(newOption)
+                    classOptionDao.insert(ClassOption(id = maxId + 1, name = name, displayOrder = displayOrder))
                 }
-
                 "SubClass" -> parentId?.let {
                     val maxId = subClassOptionDao.getMaxId() ?: 0
-                    val newOption = SubClassOption(id = maxId + 1, name, it, displayOrder)
-                    subClassOptionDao.insert(newOption)
+                    subClassOptionDao.insert(SubClassOption(id = maxId + 1, name = name, parentClassId = it, displayOrder = displayOrder))
                 }
-
                 "Grade" -> {
                     val maxId = gradeOptionDao.getMaxId() ?: 0
-                    val newOption = GradeOption(id = maxId + 1, name, displayOrder)
-                    gradeOptionDao.insert(newOption)
+                    gradeOptionDao.insert(GradeOption(id = maxId + 1, name = name, displayOrder = displayOrder))
                 }
-
                 "SubGrade" -> parentId?.let {
                     val maxId = subGradeOptionDao.getMaxId() ?: 0
-                    val newOption = SubGradeOption(id = maxId + 1, name, it, displayOrder)
-                    subGradeOptionDao.insert(newOption)
+                    subGradeOptionDao.insert(SubGradeOption(id = maxId + 1, name = name, parentGradeId = it, displayOrder = displayOrder))
                 }
-
                 "Program" -> {
                     val maxId = programOptionDao.getMaxId() ?: 0
-                    val newOption = ProgramOption(id = maxId + 1, name, displayOrder)
-                    programOptionDao.insert(newOption)
+                    programOptionDao.insert(ProgramOption(id = maxId + 1, name = name, displayOrder = displayOrder))
                 }
-
                 "Role" -> {
                     val maxId = roleOptionDao.getMaxId() ?: 0
-                    val newOption = RoleOption(id = maxId + 1, name, displayOrder)
-                    roleOptionDao.insert(newOption)
+                    roleOptionDao.insert(RoleOption(id = maxId + 1, name = name, displayOrder = displayOrder))
                 }
             }
         }
@@ -74,23 +79,18 @@ class OptionsViewModel(application: Application) : AndroidViewModel(application)
                 "Class" -> if (option is ClassOption) {
                     classOptionDao.update(option.copy(name = name, displayOrder = displayOrder))
                 }
-
                 "SubClass" -> if (option is SubClassOption && parentId != null) {
                     subClassOptionDao.update(option.copy(name = name, displayOrder = displayOrder, parentClassId = parentId))
                 }
-
                 "Grade" -> if (option is GradeOption) {
                     gradeOptionDao.update(option.copy(name = name, displayOrder = displayOrder))
                 }
-
                 "SubGrade" -> if (option is SubGradeOption && parentId != null) {
                     subGradeOptionDao.update(option.copy(name = name, displayOrder = displayOrder, parentGradeId = parentId))
                 }
-
                 "Program" -> if (option is ProgramOption) {
                     programOptionDao.update(option.copy(name = name, displayOrder = displayOrder))
                 }
-
                 "Role" -> if (option is RoleOption) {
                     roleOptionDao.update(option.copy(name = name, displayOrder = displayOrder))
                 }

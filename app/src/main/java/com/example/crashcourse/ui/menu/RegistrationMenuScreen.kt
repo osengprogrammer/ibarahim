@@ -2,13 +2,14 @@ package com.example.crashcourse.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+// ✅ TAMBAHKAN IMPORT INI:
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CameraAlt
-import androidx.compose.material.icons.filled.Group
-import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.FileUpload
+import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -16,20 +17,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 
-/**
- * 📋 RegistrationMenuScreen - Menu for choosing registration type
- * 
- * Features:
- * - ✅ Two registration options: Individual and Bulk
- * - ✅ Modern card-based UI design
- * - ✅ Clear visual distinction between options
- * - ✅ Easy navigation to respective screens
- */
 @Composable
 fun RegistrationMenuScreen(
-    onNavigateToRegister: () -> Unit = {},
-    onNavigateToBulkRegister: () -> Unit,
-    onNavigateToAddUser: () -> Unit = {}
+    onNavigateToAddUser: () -> Unit,
+    onNavigateToBulkRegister: () -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -41,206 +32,105 @@ fun RegistrationMenuScreen(
     ) {
         // Header
         Text(
-            text = "Choose Registration Type",
+            text = "Metode Registrasi",
             style = MaterialTheme.typography.headlineMedium.copy(
                 fontWeight = FontWeight.Bold
             ),
             color = MaterialTheme.colorScheme.onBackground,
             textAlign = TextAlign.Center,
+            modifier = Modifier.padding(bottom = 8.dp)
+        )
+        
+        Text(
+            text = "Silakan pilih cara pendaftaran murid baru",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
             modifier = Modifier.padding(bottom = 32.dp)
         )
 
-        // Individual Registration Card
-        Card(
-            onClick = onNavigateToRegister,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(120.dp)
-                .padding(bottom = 16.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
-            ),
-            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
-            shape = RoundedCornerShape(16.dp)
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(20.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Person,
-                    contentDescription = "Individual Registration",
-                    modifier = Modifier.size(48.dp),
-                    tint = MaterialTheme.colorScheme.onPrimaryContainer
-                )
-                
-                Column(
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text(
-                        text = "Individual Registration",
-                        style = MaterialTheme.typography.titleLarge.copy(
-                            fontWeight = FontWeight.Bold
-                        ),
-                        color = Color(0xFF008080) // Teal color
-                    )
-                    Text(
-                        text = "Register one person at a time with camera",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Color(0xFF008080).copy(alpha = 0.8f) // Teal color with transparency
-                    )
-                }
-            }
-        }
-
-
-        // Add User Card
-        Card(
-            onClick = onNavigateToAddUser,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(120.dp)
-                .padding(top = 16.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-            ),
-            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
-            shape = RoundedCornerShape(16.dp)
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(20.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Person,
-                    contentDescription = "Add User",
-                    modifier = Modifier.size(48.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-
-                Column(
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text(
-                        text = "Add New User",
-                        style = MaterialTheme.typography.titleLarge.copy(
-                            fontWeight = FontWeight.Bold
-                        ),
-                        color = Color(0xFF008080) // Teal color
-                    )
-                    Text(
-                        text = "Add a new user with face embedding and details",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Color(0xFF008080).copy(alpha = 0.8f) // Teal color with transparency
-                    )
-                }
-            }
-        }
-
-        // Excel Image Process Card
-        Card(
-            onClick = onNavigateToBulkRegister, // Reusing this navigation callback for Excel Image Process
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(120.dp)
-                .padding(top = 16.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f)
-            ),
-            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
-            shape = RoundedCornerShape(16.dp)
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(20.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Group,
-                    contentDescription = "Excel Image Process",
-                    modifier = Modifier.size(48.dp),
-                    tint = MaterialTheme.colorScheme.onSecondaryContainer
-                )
-                
-                Column(
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text(
-                        text = "Excel Image Process",
-                        style = MaterialTheme.typography.titleLarge.copy(
-                            fontWeight = FontWeight.Bold
-                        ),
-                        color = Color(0xFF008080) // Teal color
-                    )
-                    Text(
-                        text = "Process images and data from Excel file",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Color(0xFF008080).copy(alpha = 0.8f) // Teal color with transparency
-                    )
-                }
-            }
-        }
-
-        // Bulk Registration Card
-        Card(
-            onClick = onNavigateToBulkRegister,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(120.dp)
-                .padding(top = 16.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f)
-            ),
-            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
-            shape = RoundedCornerShape(16.dp)
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(20.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Group,
-                    contentDescription = "Bulk Registration",
-                    modifier = Modifier.size(48.dp),
-                    tint = MaterialTheme.colorScheme.onSecondaryContainer
-                )
-                Column(
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text(
-                        text = "Bulk Registration",
-                        style = MaterialTheme.typography.titleLarge.copy(
-                            fontWeight = FontWeight.Bold
-                        ),
-                        color = Color(0xFF008080) // Teal color
-                    )
-                    Text(
-                        text = "Register multiple users by uploading a photo or file",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Color(0xFF008080).copy(alpha = 0.8f) // Teal color with transparency
-                    )
-                }
-            }
-        }
-
-        // Helper text
-        Text(
-            text = "Choose the registration method that best fits your needs",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
-            textAlign = TextAlign.Center,
-            modifier = Modifier.padding(top = 24.dp)
+        // 1. Add New User Card (Individual)
+        RegistrationCard(
+            title = "Pendaftaran Mandiri",
+            description = "Daftarkan satu murid menggunakan kamera dan input detail manual.",
+            icon = Icons.Default.PersonAdd,
+            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f),
+            onClick = onNavigateToAddUser
         )
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        // 2. Excel Image Process Card (Bulk)
+        RegistrationCard(
+            title = "Proses Excel & Image",
+            description = "Daftarkan murid dalam jumlah banyak melalui upload file Excel dan foto.",
+            icon = Icons.Default.FileUpload,
+            containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.4f),
+            onClick = onNavigateToBulkRegister
+        )
+
+        // Footer info
+        Text(
+            text = "AzuraTech Registration System",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
+            modifier = Modifier.padding(top = 48.dp)
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun RegistrationCard(
+    title: String,
+    description: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    containerColor: Color,
+    onClick: () -> Unit
+) {
+    Card(
+        onClick = onClick,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(130.dp),
+        colors = CardDefaults.cardColors(containerColor = containerColor),
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+        shape = RoundedCornerShape(20.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(20.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            // ✅ CircleShape digunakan di sini untuk latar belakang ikon
+            Surface(
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.6f),
+                modifier = Modifier.size(56.dp)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        modifier = Modifier.size(32.dp),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
+                    color = Color(0xFF006064) // Dark Teal
+                )
+                Text(
+                    text = description,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color(0xFF006064).copy(alpha = 0.7f)
+                )
+            }
+        }
     }
 }

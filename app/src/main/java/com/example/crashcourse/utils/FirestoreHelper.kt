@@ -3,10 +3,13 @@ package com.example.crashcourse.utils
 import android.util.Log
 import com.example.crashcourse.db.CheckInRecord
 import com.example.crashcourse.db.FaceEntity
+import com.google.firebase.Timestamp
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
 import com.google.firebase.firestore.SetOptions
 import kotlinx.coroutines.tasks.await
+import java.time.ZoneId
+import java.util.Date
 
 object FirestoreHelper {
     private const val TAG = "FirestoreHelper"
@@ -126,14 +129,28 @@ object FirestoreHelper {
     }
 
     // ==========================================
-    // 2. ATTENDANCE LOG SYNC (REAL-TIME DATA)
+    // 2. ATTENDANCE LOG SYNC (PARENT APP READY)
     // ==========================================
 
     suspend fun syncAttendanceLog(record: CheckInRecord) {
         try {
+            // 🔥 KONVERSI KE NATIVE FIREBASE TIMESTAMP
+            // Ini agar Parent App bisa melakukan sorting (Terbaru -> Terlama) dengan cepat
+            val localDateTime = record.timestamp
+            val instant = localDateTime.atZone(ZoneId.systemDefault()).toInstant()
+            val date = Date.from(instant)
+            
+            // Format String untuk Grouping Header di UI Parent (contoh: "2026-02-04")
+            val dateString = localDateTime.toLocalDate().toString()
+
             val logData = hashMapOf(
                 "name" to record.name,
-                "timestamp" to record.timestamp.toString(),
+                
+                // Field Kunci untuk Query Parent
+                "timestamp" to Timestamp(date), // Tipe data Timestamp (bukan String)
+                "date_str" to dateString,       // Helper untuk filter per hari
+                "studentId" to (record.faceId ?: ""), // ID unik anak
+                
                 "status" to record.status,
                 "note" to (record.note ?: ""),
                 "className" to record.className,
@@ -143,8 +160,11 @@ object FirestoreHelper {
                 "synced_at" to System.currentTimeMillis()
             )
 
-            db.collection("attendance_logs").add(logData).await()
-            Log.d(TAG, "✅ Attendance Log Synced: ${record.name}")
+            db.collection("attendance_logs")
+                .add(logData)
+                .await()
+                
+            Log.d(TAG, "✅ Attendance Log Synced for Parent App: ${record.name} at $dateString")
         } catch (e: Exception) {
             Log.e(TAG, "❌ Failed to sync attendance log: ${e.message}")
         }
