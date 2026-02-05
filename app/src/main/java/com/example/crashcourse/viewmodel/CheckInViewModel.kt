@@ -11,19 +11,25 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import java.time.LocalDate
-import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 
 class CheckInViewModel(application: Application) : AndroidViewModel(application) {
     private val database = AppDatabase.getInstance(application)
     private val checkInRecordDao = database.checkInRecordDao()
+    
+    // Formatter agar sinkron dengan input dari UI (DatePicker)
+    private val dateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")
 
     // --- CRUD OPERATIONS ---
 
     fun addManualRecord(record: CheckInRecord) {
         viewModelScope.launch(Dispatchers.IO) {
+            // 1. Simpan ke Database Lokal (Room)
             checkInRecordDao.insert(record)
+            
+            // 2. Kirim ke Cloud (Firestore) agar muncul di HP Orang Tua
+            // Karena kita sudah update FirestoreHelper, ini akan mengirim studentId (NIK) juga.
             FirestoreHelper.syncAttendanceLog(record)
         }
     }
@@ -31,6 +37,7 @@ class CheckInViewModel(application: Application) : AndroidViewModel(application)
     fun updateRecord(record: CheckInRecord) {
         viewModelScope.launch(Dispatchers.IO) {
             checkInRecordDao.update(record)
+            // Update juga ke Cloud (Optional: Tergantung kebutuhan, tapi aman untuk dipanggil)
             FirestoreHelper.syncAttendanceLog(record)
         }
     }
@@ -54,11 +61,6 @@ class CheckInViewModel(application: Application) : AndroidViewModel(application)
         return summary
     }
 
-    // 🔥 CATATAN PENTING:
-    // Fungsi exportToPdf dan exportToCsv SUDAH DIHAPUS dari sini.
-    // Sekarang logika export ditangani langsung di UI (CheckInRecordScreen)
-    // menggunakan ActivityResultLauncher untuk memilih folder penyimpanan.
-
     // --- 🛡️ SMART SCOPED FILTERING ---
 
     fun getScopedCheckIns(
@@ -71,13 +73,14 @@ class CheckInViewModel(application: Application) : AndroidViewModel(application)
         programId: Int? = null
     ): Flow<List<CheckInRecord>> {
         
-        // Ambil semua data mentah (Raw Data)
+        // Ambil semua data dari Room, lalu filter di memory (Kotlin)
+        // Ini lebih fleksibel daripada query SQL yang rumit untuk filter opsional
         return checkInRecordDao.getAllRecords().map { allRecords ->
             
-            val startD = if (startDate.isNotBlank()) LocalDate.parse(startDate).atStartOfDay() else null
-            val endD = if (endDate.isNotBlank()) LocalDate.parse(endDate).atTime(LocalTime.MAX) else null
+            // Parsing Tanggal dengan aman
+            val startD = if (startDate.isNotBlank()) LocalDate.parse(startDate, dateFormatter).atStartOfDay() else null
+            val endD = if (endDate.isNotBlank()) LocalDate.parse(endDate, dateFormatter).atTime(LocalTime.MAX) else null
 
-            // Filter manual di Kotlin (Lebih aman dari Null Pointer Exception)
             allRecords.filter { record ->
                 // A. Match Nama
                 val matchesName = nameFilter.isEmpty() || record.name.contains(nameFilter, ignoreCase = true)
@@ -98,12 +101,13 @@ class CheckInViewModel(application: Application) : AndroidViewModel(application)
                 val matchesGrade = gradeId == null || record.gradeId == gradeId
                 val matchesProgram = programId == null || record.programId == programId
 
-                // E. Role Security (Admin lihat semua, Guru hanya lihat kelasnya)
+                // E. Role Security (Admin lihat semua, Guru hanya lihat kelas yang ditugaskan)
                 val inScope = if (authState.role == "ADMIN") true 
                               else authState.assignedClasses.contains(record.className)
 
                 matchesName && matchesDate && matchesClass && matchesGrade && matchesProgram && inScope
             }
+            .sortedByDescending { it.timestamp } // ✅ FITUR BARU: Urutkan dari yang terbaru ke terlama
         }
     }
 }

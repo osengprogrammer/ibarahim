@@ -8,6 +8,7 @@ import java.time.LocalDateTime
 data class CheckInRecord(
     @PrimaryKey(autoGenerate = true)
     val id: Int = 0,
+    val studentId: String, // ✅ WAJIB: NIK/NIS Siswa
     val name: String,
     val timestamp: LocalDateTime,
     val faceId: Int? = null,
@@ -19,7 +20,6 @@ data class CheckInRecord(
     val programId: Int? = null,
     val roleId: Int? = null,
     val note: String? = null,
-    // ✅ Tambahkan kembali dua field ini agar Export & ViewModel tidak error
     val className: String? = null,
     val gradeName: String? = null
 )

@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 5,
-    "identityHash": "7c30529bc15854652b6686ef3efb0f14",
+    "identityHash": "46e68d091a7d2cd9d41c83718163c3f0",
     "entities": [
       {
         "tableName": "class_options",
@@ -332,12 +332,18 @@
       },
       {
         "tableName": "check_in_records",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `name` TEXT NOT NULL, `timestamp` INTEGER NOT NULL, `faceId` INTEGER, `status` TEXT NOT NULL, `classId` INTEGER, `subClassId` INTEGER, `gradeId` INTEGER, `subGradeId` INTEGER, `programId` INTEGER, `roleId` INTEGER, `note` TEXT, `className` TEXT, `gradeName` TEXT)",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `studentId` TEXT NOT NULL, `name` TEXT NOT NULL, `timestamp` INTEGER NOT NULL, `faceId` INTEGER, `status` TEXT NOT NULL, `classId` INTEGER, `subClassId` INTEGER, `gradeId` INTEGER, `subGradeId` INTEGER, `programId` INTEGER, `roleId` INTEGER, `note` TEXT, `className` TEXT, `gradeName` TEXT)",
         "fields": [
           {
             "fieldPath": "id",
             "columnName": "id",
             "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "studentId",
+            "columnName": "studentId",
+            "affinity": "TEXT",
             "notNull": true
           },
           {
@@ -432,7 +438,7 @@
     "views": [],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '7c30529bc15854652b6686ef3efb0f14')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '46e68d091a7d2cd9d41c83718163c3f0')"
     ]
   }
 }

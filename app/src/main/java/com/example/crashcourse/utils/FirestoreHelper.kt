@@ -14,64 +14,61 @@ import java.util.Date
 object FirestoreHelper {
     private const val TAG = "FirestoreHelper"
     
+    // Inisialisasi Firestore secara Lazy
     private val db by lazy { FirebaseFirestore.getInstance() }
 
     // ==========================================
-    // 1. STUDENT DATA SYNC (WITH TEACHER SCOPE)
+    // 1. DATA SISWA (Sync Profil & Wajah)
     // ==========================================
 
     /**
-     * SYNC DOWN (SCOPED): Downloads students based on Teacher's assigned classes.
-     * If user is ADMIN or has no assigned classes, it downloads everything.
+     * Mengambil data siswa dari Cloud berdasarkan hak akses Guru (Assigned Classes).
      */
     suspend fun getScopedStudentsFromFirestore(uid: String): List<FaceEntity> {
         return try {
-            // 1. Get User Profile to check scope
+            // 1. Cek hak akses di dokumen user
             val userDoc = db.collection("users").document(uid).get().await()
             val role = userDoc.getString("role") ?: "USER"
+            
+            @Suppress("UNCHECKED_CAST")
             val assignedClasses = userDoc.get("assigned_classes") as? List<String> ?: emptyList()
 
-            Log.d(TAG, "Fetching scope for UID: $uid | Role: $role | Classes: $assignedClasses")
+            Log.d(TAG, "Fetching scope for UID: $uid | Role: $role")
 
-            // 2. Define Query based on Scope
+            // 2. Buat Query berdasarkan Role
             val query: Query = if (role == "ADMIN" || assignedClasses.isEmpty()) {
-                db.collection("students") // Full Access
+                db.collection("students")
             } else {
-                // Scoped Access: Only students in these classes
                 db.collection("students").whereIn("className", assignedClasses)
             }
 
             val snapshot = query.get().await()
-            val students = mutableListOf<FaceEntity>()
-
-            for (doc in snapshot.documents) {
-                try {
-                    val embeddingList = doc.get("embedding") as? List<Double>
-                    val embeddingFloatArray = embeddingList?.map { it.toFloat() }?.toFloatArray()
-
-                    if (embeddingFloatArray != null) {
-                        students.add(mapDocToFaceEntity(doc, embeddingFloatArray))
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error parsing doc ${doc.id}: ${e.message}")
+            
+            // 3. Mapping hasil ke List FaceEntity
+            snapshot.documents.mapNotNull { doc ->
+                val embeddingList = doc.get("embedding") as? List<Double>
+                val embeddingFloatArray = embeddingList?.map { it.toFloat() }?.toFloatArray()
+                
+                if (embeddingFloatArray != null) {
+                    mapDocToFaceEntity(doc, embeddingFloatArray)
+                } else {
+                    null
                 }
             }
-            Log.d(TAG, "Scope Sync Complete. Downloaded ${students.size} students.")
-            students
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to download scoped students", e)
+            Log.e(TAG, "❌ Error Download Students: ${e.message}")
             emptyList()
         }
     }
 
     /**
-     * Helper to map Firestore Document to FaceEntity
+     * Mapping Document Firestore ke FaceEntity lokal
      */
     private fun mapDocToFaceEntity(doc: com.google.firebase.firestore.DocumentSnapshot, embedding: FloatArray): FaceEntity {
         return FaceEntity(
             studentId = doc.getString("studentId") ?: "",
             name = doc.getString("name") ?: "Unknown",
-            photoUrl = null, 
+            photoUrl = doc.getString("photoUrl"), 
             embedding = embedding,
             className = doc.getString("className") ?: "",
             subClass = doc.getString("subClass") ?: "",
@@ -90,9 +87,15 @@ object FirestoreHelper {
     }
 
     /**
-     * SYNC UP: Uploads a local FaceEntity to Firestore
+     * Upload profil siswa (saat registrasi wajah) ke Cloud.
+     * Menggunakan studentId sebagai Document ID agar data tidak duplikat.
      */
     suspend fun syncStudentToFirestore(face: FaceEntity): Boolean {
+        if (face.studentId.isBlank()) {
+            Log.e(TAG, "❌ Gagal Sync: studentId kosong!")
+            return false
+        }
+
         return try {
             val embeddingList = face.embedding.map { it.toDouble() }
             val studentData = hashMapOf(
@@ -112,61 +115,58 @@ object FirestoreHelper {
                 "roleId" to face.roleId,
                 "embedding" to embeddingList,
                 "last_updated" to System.currentTimeMillis(),
-                "photoUrl" to "" 
+                "photoUrl" to (face.photoUrl ?: "")
             )
 
             db.collection("students") 
                 .document(face.studentId)
                 .set(studentData, SetOptions.merge())
-                .await()
+                .await() 
 
-            Log.d(TAG, "Synced Student to Firestore: ${face.name}")
+            Log.d(TAG, "✅ Profil Siswa Tersinkron: ${face.name}")
             true
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to sync student ${face.name}: ${e.message}")
+            Log.e(TAG, "❌ Gagal Sync Siswa: ${e.message}")
             false
         }
     }
 
     // ==========================================
-    // 2. ATTENDANCE LOG SYNC (PARENT APP READY)
+    // 2. LOG ABSENSI (Parent App Sync)
     // ==========================================
 
+    /**
+     * Kirim log absen ke Firestore. 
+     * Menggunakan .add() agar tersimpan sebagai log riwayat (History).
+     */
     suspend fun syncAttendanceLog(record: CheckInRecord) {
         try {
-            // 🔥 KONVERSI KE NATIVE FIREBASE TIMESTAMP
-            // Ini agar Parent App bisa melakukan sorting (Terbaru -> Terlama) dengan cepat
+            // Konversi java.time.LocalDateTime ke java.util.Date untuk Firebase
             val localDateTime = record.timestamp
             val instant = localDateTime.atZone(ZoneId.systemDefault()).toInstant()
             val date = Date.from(instant)
-            
-            // Format String untuk Grouping Header di UI Parent (contoh: "2026-02-04")
             val dateString = localDateTime.toLocalDate().toString()
 
             val logData = hashMapOf(
+                "studentId" to record.studentId, // Kunci utama untuk App Orang Tua
                 "name" to record.name,
-                
-                // Field Kunci untuk Query Parent
-                "timestamp" to Timestamp(date), // Tipe data Timestamp (bukan String)
-                "date_str" to dateString,       // Helper untuk filter per hari
-                "studentId" to (record.faceId ?: ""), // ID unik anak
-                
+                "timestamp" to Timestamp(date), // Tipe data Timestamp Firestore
+                "date_str" to dateString,       // Helper format YYYY-MM-DD
                 "status" to record.status,
                 "note" to (record.note ?: ""),
-                "className" to record.className,
-                "gradeName" to record.gradeName,
-                "classId" to record.classId,
-                "gradeId" to record.gradeId,
+                "className" to (record.className ?: ""),
+                "gradeName" to (record.gradeName ?: ""),
                 "synced_at" to System.currentTimeMillis()
             )
 
+            // Menggunakan .add() agar tercipta dokumen baru setiap kali absen
             db.collection("attendance_logs")
                 .add(logData)
                 .await()
                 
-            Log.d(TAG, "✅ Attendance Log Synced for Parent App: ${record.name} at $dateString")
+            Log.d(TAG, "✅ Log Absen Terkirim ke Cloud: ${record.name}")
         } catch (e: Exception) {
-            Log.e(TAG, "❌ Failed to sync attendance log: ${e.message}")
+            Log.e(TAG, "❌ Gagal Upload Log Absen: ${e.message}")
         }
     }
 }

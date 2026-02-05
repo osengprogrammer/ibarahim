@@ -161,4 +161,5 @@ dependencies {
     
     // Jangan lupa common ktx untuk interoperabilitas coroutines
     implementation("com.google.firebase:firebase-common-ktx:20.4.2")
+    implementation("com.google.code.gson:gson:2.10.1")
 }

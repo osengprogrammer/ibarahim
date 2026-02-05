@@ -5,6 +5,7 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
+import com.example.crashcourse.utils.Converters
 
 @Database(
     entities = [
@@ -17,19 +18,21 @@ import androidx.room.TypeConverters
         FaceEntity::class,
         CheckInRecord::class
     ],
-    version = 5,
-    exportSchema = true
+    version = 6, // ✅ Versi Terbaru
+    exportSchema = false
 )
-@TypeConverters(Converters::class)
+@TypeConverters(Converters::class) // ✅ Memanggil file Converters.kt di atas
 abstract class AppDatabase : RoomDatabase() {
     abstract fun faceDao(): FaceDao
+    abstract fun checkInRecordDao(): CheckInRecordDao
+    
+    // DAO Options
     abstract fun classOptionDao(): ClassOptionDao
     abstract fun subClassOptionDao(): SubClassOptionDao
     abstract fun gradeOptionDao(): GradeOptionDao
     abstract fun subGradeOptionDao(): SubGradeOptionDao
     abstract fun programOptionDao(): ProgramOptionDao
     abstract fun roleOptionDao(): RoleOptionDao
-    abstract fun checkInRecordDao(): CheckInRecordDao
 
     companion object {
         @Volatile private var INSTANCE: AppDatabase? = null
@@ -41,7 +44,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "face_db"
                 )
-                .fallbackToDestructiveMigration() // For simplicity, recreate DB on schema change 
+                .fallbackToDestructiveMigration() // Reset DB otomatis kalau ada perubahan
                 .build().also { INSTANCE = it }
             }
     }
