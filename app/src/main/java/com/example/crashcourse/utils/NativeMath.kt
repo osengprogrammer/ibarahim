@@ -5,7 +5,7 @@ import java.nio.ByteBuffer
 object NativeMath {
     init {
         // Pastikan nama ini sesuai dengan CMakeLists.txt kamu
-        System.loadLibrary("azura_native")
+        System.loadLibrary("native_image")
     }
 
     /**

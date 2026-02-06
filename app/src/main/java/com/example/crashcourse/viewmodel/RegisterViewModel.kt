@@ -10,15 +10,28 @@ import com.example.crashcourse.db.FaceCache
 import com.example.crashcourse.db.FaceEntity
 import com.example.crashcourse.utils.BulkPhotoProcessor
 import com.example.crashcourse.utils.CsvImportUtils
-import com.example.crashcourse.utils.FirestoreHelper // ✅ Import Helper
+import com.example.crashcourse.utils.FirestoreHelper 
+import com.example.crashcourse.utils.NativeMath // ✅ Fixed: Use NativeMath instead of old utility
 import com.example.crashcourse.utils.PhotoProcessingUtils
 import com.example.crashcourse.utils.PhotoStorageUtils
 import com.example.crashcourse.utils.ProcessResult
-import com.example.crashcourse.utils.cosineDistance
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+
+data class ProcessingState(
+    val isProcessing: Boolean = false,
+    val status: String = "Waiting for CSV...",
+    val progress: Float = 0f,
+    val estimatedTime: String = "",
+    val results: List<ProcessResult> = emptyList(),
+    val successCount: Int = 0,
+    val duplicateCount: Int = 0,
+    val errorCount: Int = 0,
+    val currentPhotoType: String = "",
+    val currentPhotoSize: String = ""
+)
 
 class RegisterViewModel : ViewModel() {
     private val _state = MutableStateFlow(ProcessingState())
@@ -87,7 +100,6 @@ class RegisterViewModel : ViewModel() {
 
                         val result = processStudent(context, student)
                         
-                        // Check result status for statistics
                         when {
                             result.status.contains("Registered") -> successCount++
                             result.status.startsWith("Duplicate") -> duplicateCount++
@@ -139,7 +151,6 @@ class RegisterViewModel : ViewModel() {
         context: Context,
         student: CsvImportUtils.CsvStudentData
     ): ProcessResult {
-        // 1. Process Photo Source (Download/Decode)
         val photoResult = BulkPhotoProcessor.processPhotoSource(
             context = context,
             photoSource = student.photoUrl,
@@ -156,7 +167,6 @@ class RegisterViewModel : ViewModel() {
             )
         }
 
-        // 2. Decode Bitmap for Embedding
         val bitmap = BitmapFactory.decodeFile(photoResult.localPhotoUrl)
             ?: return ProcessResult(
                 studentId = student.studentId,
@@ -166,7 +176,6 @@ class RegisterViewModel : ViewModel() {
                 photoSize = photoResult.originalSize
             )
 
-        // 3. Generate Face Embedding
         val embeddingResult = PhotoProcessingUtils.processBitmapForFaceEmbedding(context, bitmap)
             ?: return ProcessResult(
                 studentId = student.studentId,
@@ -178,7 +187,6 @@ class RegisterViewModel : ViewModel() {
 
         val (faceBitmap, embedding) = embeddingResult
 
-        // 4. Save Final Face Photo to Internal Storage
         val photoPath = PhotoStorageUtils.saveFacePhoto(context, faceBitmap, student.studentId)
             ?: return ProcessResult(
                 studentId = student.studentId,
@@ -190,7 +198,6 @@ class RegisterViewModel : ViewModel() {
 
         val faceDao = AppDatabase.getInstance(context).faceDao()
 
-        // 5. Check for ID Duplicates
         val existingFace = faceDao.getFaceByStudentId(student.studentId)
         if (existingFace != null) {
             return ProcessResult(
@@ -201,12 +208,13 @@ class RegisterViewModel : ViewModel() {
             )
         }
 
-        // 6. Check for Visual Duplicates (Embeddings)
+        // 6. ✅ Visual Duplicate Check using NATIVE math
         val allFaces = faceDao.getAllFaces()
         val DUPLICATE_THRESHOLD = 0.3f
 
         for (face in allFaces) {
-            val dist = cosineDistance(face.embedding, embedding)
+            // Updated to use NativeMath engine
+            val dist = NativeMath.cosineDistance(face.embedding, embedding)
             if (dist <= DUPLICATE_THRESHOLD) {
                 return ProcessResult(
                     studentId = student.studentId,
@@ -217,7 +225,6 @@ class RegisterViewModel : ViewModel() {
             }
         }
 
-        // 7. Create Entity
         val faceEntity = FaceEntity(
             studentId = student.studentId,
             name = student.name,
@@ -232,12 +239,9 @@ class RegisterViewModel : ViewModel() {
             timestamp = System.currentTimeMillis()
         )
 
-        // 8. Save to Local DB (Room) 
         faceDao.insert(faceEntity)
 
-        // 9. 🔥 SYNC TO FIRESTORE 🔥
         val isSynced = FirestoreHelper.syncStudentToFirestore(faceEntity)
-        
         val statusMessage = if (isSynced) "Registered & Synced" else "Registered (Local Only)"
 
         return ProcessResult(
