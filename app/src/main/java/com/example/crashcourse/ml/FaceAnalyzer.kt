@@ -6,40 +6,38 @@ import android.util.Log
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import androidx.compose.ui.unit.IntSize
+import com.example.crashcourse.ml.BitmapUtils // ✅ Explicit Import
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.face.FaceDetection
 import com.google.mlkit.vision.face.FaceDetectorOptions
 import java.util.concurrent.atomic.AtomicBoolean
+import java.nio.ByteBuffer
 
-/**
- * =================================================
- * PHASE-3 LIVENESS-ENABLED FACE ANALYZER
- * =================================================
- *
- * Adds Eye-Tracking capabilities to detect blinks, preventing 
- * photo-spoofing attacks.
- */
 class FaceAnalyzer(
     private val onResult: (FaceResult) -> Unit
 ) : ImageAnalysis.Analyzer {
 
-    /**
-     * Data class updated to include Eye Open Probabilities
-     */
+    companion object {
+        private const val FACE_NET_INPUT_SIZE = 112
+        // 💡 Brightness Threshold (0 - 255)
+        // Below 45 usually means the face features are lost in shadow.
+        private const val MIN_LUMINOSITY = 45.0 
+    }
+
     data class FaceResult(
         val bounds: List<Rect>,
         val imageSize: IntSize,
         val rotation: Int,
         val embeddings: List<Pair<Rect, FloatArray>>,
-        val leftEyeOpenProb: Float?,  // 🆕 Range [0.0, 1.0]
-        val rightEyeOpenProb: Float?  // 🆕 Range [0.0, 1.0]
+        val leftEyeOpenProb: Float?,
+        val rightEyeOpenProb: Float?,
+        val isLowLight: Boolean // 🆕 New Field for UI Warning
     )
 
-    // ✅ PHASE-3: Updated options to enable Classification
     private val detector = FaceDetection.getClient(
         FaceDetectorOptions.Builder()
             .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
-            .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_ALL) // 👈 CRITICAL
+            .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_ALL)
             .enableTracking()
             .build()
     )
@@ -48,7 +46,6 @@ class FaceAnalyzer(
 
     @androidx.annotation.OptIn(androidx.camera.core.ExperimentalGetImage::class)
     override fun analyze(imageProxy: ImageProxy) {
-
         if (isProcessing.get()) {
             imageProxy.close()
             return
@@ -61,55 +58,77 @@ class FaceAnalyzer(
 
         isProcessing.set(true)
 
-        val rotation = imageProxy.imageInfo.rotationDegrees
-
-        val imageSize = if (rotation % 180 == 0) {
-            IntSize(imageProxy.width, imageProxy.height)
-        } else {
-            IntSize(imageProxy.height, imageProxy.width)
+        // 1. 💡 CHECK BRIGHTNESS FIRST
+        // If it's too dark, don't even bother with Face Detection (saves battery & prevents errors)
+        val luminosity = calculateLuminosity(mediaImage)
+        if (luminosity < MIN_LUMINOSITY) {
+            Log.w("FaceAnalyzer", "Too Dark: $luminosity")
+            onResult(
+                FaceResult(
+                    bounds = emptyList(),
+                    imageSize = IntSize(mediaImage.width, mediaImage.height),
+                    rotation = imageProxy.imageInfo.rotationDegrees,
+                    embeddings = emptyList(),
+                    leftEyeOpenProb = null,
+                    rightEyeOpenProb = null,
+                    isLowLight = true // 🚨 Tell UI to show "Turn on Light"
+                )
+            )
+            imageProxy.close()
+            isProcessing.set(false)
+            return
         }
 
+        // 2. CONTINUE WITH RECOGNITION IF LIGHT IS GOOD
+        val rotation = imageProxy.imageInfo.rotationDegrees
+        val width = if (rotation == 90 || rotation == 270) mediaImage.height else mediaImage.width
+        val height = if (rotation == 90 || rotation == 270) mediaImage.width else mediaImage.height
         val inputImage = InputImage.fromMediaImage(mediaImage, rotation)
 
         detector.process(inputImage)
             .addOnSuccessListener { faces ->
-
                 val results = mutableListOf<Pair<Rect, FloatArray>>()
-                
-                // Track eyes of the primary face (the one being recognized)
                 var primaryLeftEye: Float? = null
                 var primaryRightEye: Float? = null
 
                 for (face in faces) {
-                    // Capture eye data for the first detected face
+                    val bounds = face.boundingBox
+
+                    // 🛑 EDGE CHECK: Ignore faces touching the screen edge
+                    val margin = 20
+                    val isTouchingEdge = bounds.left < margin || 
+                                         bounds.top < margin || 
+                                         bounds.right > width - margin || 
+                                         bounds.bottom > height - margin
+
+                    if (isTouchingEdge) continue 
+
                     if (primaryLeftEye == null) {
                         primaryLeftEye = face.leftEyeOpenProbability
                         primaryRightEye = face.rightEyeOpenProbability
                     }
 
-                    // L2 — SAFE PIXEL EXTRACTION
+                    // Preprocess and Recognize
                     val inputBuffer = BitmapUtils.preprocessFace(
                         image = mediaImage,
                         boundingBox = face.boundingBox,
-                        rotation = rotation
+                        rotation = rotation,
+                        outputSize = FACE_NET_INPUT_SIZE
                     )
 
-                    // Native inference
                     val rawEmbedding = FaceRecognizer.recognizeFace(inputBuffer)
-                    val safeEmbedding = rawEmbedding.clone()
-
-                    results.add(face.boundingBox to safeEmbedding)
+                    results.add(face.boundingBox to rawEmbedding.clone())
                 }
 
-                // EMIT FACT WITH LIVENESS DATA
                 onResult(
                     FaceResult(
                         bounds = faces.map { it.boundingBox },
-                        imageSize = imageSize,
+                        imageSize = IntSize(width, height),
                         rotation = rotation,
                         embeddings = results,
                         leftEyeOpenProb = primaryLeftEye,
-                        rightEyeOpenProb = primaryRightEye
+                        rightEyeOpenProb = primaryRightEye,
+                        isLowLight = false // ✅ Light is good
                     )
                 )
             }
@@ -124,5 +143,31 @@ class FaceAnalyzer(
 
     fun close() {
         detector.close()
+    }
+
+    /**
+     * ⚡ Ultra-fast Brightness Calculation
+     * We only sample pixels from the Y-Plane (Grayscale), we don't convert the whole image.
+     */
+    private fun calculateLuminosity(image: Image): Double {
+        val plane = image.planes[0] // Y Plane = Brightness
+        val buffer = plane.buffer
+        buffer.rewind()
+        
+        val data = ByteArray(buffer.remaining())
+        buffer.get(data)
+        
+        var sum = 0L
+        // Sample every 10th pixel to be extremely fast
+        val step = 10 
+        var count = 0
+
+        for (i in 0 until data.size step step) {
+            // Convert byte (-128 to 127) to unsigned int (0 to 255)
+            sum += (data[i].toInt() and 0xFF)
+            count++
+        }
+
+        return if (count > 0) sum.toDouble() / count else 0.0
     }
 }

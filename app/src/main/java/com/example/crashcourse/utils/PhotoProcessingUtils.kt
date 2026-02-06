@@ -19,7 +19,9 @@ import java.nio.ByteOrder
 
 object PhotoProcessingUtils {
     private const val TAG = "PhotoProcessingUtils"
-    private const val INPUT_SIZE = 160
+    
+    // ✅ Updated to 112 to match your new MobileFaceNet model metadata
+    private const val INPUT_SIZE = 112 
 
     /**
      * Process a bitmap to detect faces and generate embeddings
@@ -36,7 +38,7 @@ object PhotoProcessingUtils {
                 bitmap
             }
 
-            // Detect faces
+            // Detect faces using ML Kit
             val faces = detectFacesInBitmap(processedBitmap)
 
             if (faces.isEmpty()) {
@@ -44,7 +46,7 @@ object PhotoProcessingUtils {
                 return@withContext null
             }
 
-            // Use the largest face
+            // Use the largest face found
             val largestFace = faces.maxByOrNull { it.width() * it.height() }
                 ?: return@withContext null
 
@@ -104,7 +106,7 @@ object PhotoProcessingUtils {
     }
 
     private fun generateEmbeddingFromFaceBitmap(faceBitmap: Bitmap): FloatArray {
-        // Resize to model input size
+        // ✅ Resize to 112x112 for the new model
         val resizedBitmap = faceBitmap.scale(INPUT_SIZE, INPUT_SIZE)
 
         // Convert to ByteBuffer format expected by the model
@@ -115,11 +117,11 @@ object PhotoProcessingUtils {
     }
 
     /**
-     * 🚀 NATIVE OPTIMIZATION APPLIED HERE
-     * Convert bitmap to ByteBuffer using C++ for normalization
+     * 🚀 NATIVE OPTIMIZATION
+     * Convert bitmap to ByteBuffer using C++ for high-speed normalization
      */
     private fun bitmapToByteBuffer(bitmap: Bitmap): ByteBuffer {
-        // 1. Allocate Direct Buffer
+        // 1. Allocate Direct Buffer (Width * Height * 3 channels * 4 bytes for Float)
         val buffer = ByteBuffer.allocateDirect(INPUT_SIZE * INPUT_SIZE * 3 * 4)
             .order(ByteOrder.nativeOrder())
 
@@ -127,14 +129,14 @@ object PhotoProcessingUtils {
         bitmap.getPixels(intVals, 0, INPUT_SIZE, 0, 0, INPUT_SIZE, INPUT_SIZE)
 
         // 2. Put Raw RGB values (0-255) into buffer
-        // We removed the slow Kotlin math division here!
+        buffer.rewind()
         for (pixel in intVals) {
             buffer.putFloat(((pixel shr 16) and 0xFF).toFloat()) // R
             buffer.putFloat(((pixel shr 8) and 0xFF).toFloat())  // G
             buffer.putFloat((pixel       and 0xFF).toFloat())    // B
         }
 
-        // 3. 🚀 Call Native C++ to handle the math
+        // 3. 🚀 Call Native C++ to handle the (x - 127.5) / 128.0 math
         buffer.rewind()
         NativeMath.preprocessImage(buffer, INPUT_SIZE * INPUT_SIZE * 3)
         

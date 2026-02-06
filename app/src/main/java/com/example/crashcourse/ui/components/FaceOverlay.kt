@@ -1,4 +1,4 @@
-package com.example.crashcourse.ui
+package com.example.crashcourse.ui.components // ✅ THIS IS THE CRITICAL FIX
 
 import android.graphics.Rect
 import androidx.compose.foundation.Canvas

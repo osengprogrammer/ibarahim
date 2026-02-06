@@ -7,7 +7,9 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.crashcourse.util.DeviceUtil
 import com.google.firebase.Firebase
+import com.google.firebase.Timestamp // 🚀 Added for expiry_date
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.FirebaseAuthUserCollisionException
 import com.google.firebase.auth.auth
 import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.firestore
@@ -16,7 +18,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
-import java.util.Date
+import java.util.*
 
 class AuthViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -42,7 +44,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // --- 1. REGISTRASI ---
+    // --- 1. REGISTRASI (Automated Expiry) ---
     fun register(email: String, pass: String, schoolName: String) {
         if (email.isBlank() || pass.isBlank() || schoolName.isBlank()) {
             _authState.value = AuthState.Error("Semua kolom wajib diisi.")
@@ -53,21 +55,33 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val result = auth.createUserWithEmailAndPassword(email, pass).await()
                 val uid = result.user?.uid ?: throw Exception("Gagal mendapatkan UID")
+
+                // 🚀 AUTO-GENERATE EXPIRY DATE (e.g., 30 Days Trial)
+                val calendar = Calendar.getInstance()
+                calendar.add(Calendar.DAY_OF_YEAR, 30) 
+                val defaultExpiry = Timestamp(calendar.time)
+
                 val userData = hashMapOf(
                     "uid" to uid,
                     "email" to email,
                     "school_name" to schoolName,
                     "device_id" to currentDeviceId,
                     "status" to "PENDING",
-                    "role" to "USER",
+                    "role" to "ADMIN", // First registrant is usually the Admin
                     "max_offline_days" to 7,
-                    "assigned_classes" to emptyList<String>(), // Default kosong
+                    "expiry_date" to defaultExpiry, // 🚀 Now added automatically
+                    "assigned_classes" to emptyList<String>(),
                     "created_at" to System.currentTimeMillis()
                 )
                 db.collection("users").document(uid).set(userData).await()
                 startListeningToUserStatus(uid)
             } catch (e: Exception) {
-                _authState.value = AuthState.Error("Registrasi Gagal: ${e.message}")
+                val msg = if (e is FirebaseAuthUserCollisionException) {
+                    "Email sudah terdaftar. Silakan login."
+                } else {
+                    "Registrasi Gagal: ${e.message}"
+                }
+                _authState.value = AuthState.Error(msg)
             }
         }
     }
@@ -122,7 +136,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                     "device_id" to currentDeviceId,
                     "status" to "ACTIVE",
                     "role" to "USER",
-                    "expiry_date" to expiryDate,
+                    "expiry_date" to expiryDate, // 🚀 Inherits expiry from Admin
                     "max_offline_days" to maxOffline,
                     "assigned_classes" to emptyList<String>(), 
                     "invited_by" to adminUid,
@@ -135,7 +149,8 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                 _authState.value = AuthState.LoggedOut
                 
             } catch (e: Exception) {
-                _authState.value = AuthState.Error("Gagal Invite: ${e.message}")
+                val msg = if (e is FirebaseAuthUserCollisionException) "Email guru sudah terdaftar!" else "Gagal Invite: ${e.message}"
+                _authState.value = AuthState.Error(msg)
             }
         }
     }
@@ -176,7 +191,6 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                     val expiryTimestamp = snapshot.getTimestamp("expiry_date")
                     val maxOffline = snapshot.getLong("max_offline_days")?.toInt() ?: 7
                     
-                    // ✅ AMBIL DATA ASSIGNED CLASSES SECARA AMAN
                     val assignedFromDb = (snapshot.get("assigned_classes") as? List<*>)?.filterIsInstance<String>() ?: emptyList()
                     
                     val currentTime = Date()
@@ -192,6 +206,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                          return@addSnapshotListener
                     }
 
+                    // 🚀 CHECK EXPIRY (Safety Lock)
                     if (expiryTimestamp != null && currentTime.after(expiryTimestamp.toDate())) {
                         _authState.value = AuthState.StatusWaiting("MASA BERLAKU HABIS.")
                         return@addSnapshotListener
@@ -200,9 +215,9 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                     when (status) {
                         "ACTIVE" -> {
                             if (expiryTimestamp == null) {
+                                // 🛡️ Still blocks if someone manually deleted it
                                 _authState.value = AuthState.StatusWaiting("MENUNGGU KONFIGURASI ADMIN.")
                             } else {
-                                // ✅ SEKARANG MENGIRIM assignedClasses KE UI & VIEWMODEL LAIN
                                 _authState.value = AuthState.Active(
                                     uid = uid,
                                     email = email,

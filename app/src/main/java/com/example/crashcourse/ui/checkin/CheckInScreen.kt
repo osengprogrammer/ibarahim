@@ -6,30 +6,35 @@ import android.media.ToneGenerator
 import android.speech.tts.TextToSpeech
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Face
+import androidx.compose.material.icons.filled.WbSunny // ☀️ Sun Icon (Filled)
+import androidx.compose.material.icons.outlined.WbSunny // ☀️ Sun Icon (Outlined)
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.crashcourse.db.FaceCache
 import com.example.crashcourse.scanner.FaceScanner
+import com.example.crashcourse.ui.components.FaceOverlay
 import com.example.crashcourse.utils.NativeMath
 import com.example.crashcourse.viewmodel.FaceViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.util.*
-import kotlin.math.abs
 
 @Composable
 fun CheckInScreen(
@@ -41,24 +46,35 @@ fun CheckInScreen(
     var gallery by remember { mutableStateOf<List<Pair<String, FloatArray>>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
 
+    // 🚀 NEW STATE: Light Boost (ISO)
+    var isLightBoostOn by remember { mutableStateOf(false) }
+
+    // --- ⏱️ COOLDOWN STATE ---
+    var successCountdown by remember { mutableIntStateOf(0) } 
+    val isCoolingDown = successCountdown > 0
+
     // Status State
     var matchName by remember { mutableStateOf<String?>(null) }
-    var isRegistered by remember { mutableStateOf(true) }
     var alreadyCheckedIn by remember { mutableStateOf(false) }
     var secondsRemaining by remember { mutableIntStateOf(0) }
     
-    // LIVENESS STATE
-    var livenessState by remember { mutableStateOf(0) } 
+    // --- 🛡️ SECURITY STATE ---
+    // 1. Liveness
+    var livenessState by remember { mutableIntStateOf(0) } 
     var livenessMessage by remember { mutableStateOf("Position face") }
     var lastFaceDetectedTime by remember { mutableLongStateOf(System.currentTimeMillis()) }
-
-    // 🛡️ SECURITY: Identity Lock (Identity + Location)
     var verifiedEmbedding by remember { mutableStateOf<FloatArray?>(null) }
-    var lastVerifiedBounds by remember { mutableStateOf<Rect?>(null) }
 
+    // 2. 🛡️ CONSENSUS (ANTI-FALSE POSITIVE)
+    // We need to see the SAME person 3 times in a row to trust it.
+    var candidateName by remember { mutableStateOf<String?>(null) }
+    var stabilityCounter by remember { mutableIntStateOf(0) }
+    val REQUIRED_STABILITY = 3 
+
+    // UI Drawing State
     var faceBounds by remember { mutableStateOf<List<Rect>>(emptyList()) }
     var imageSize by remember { mutableStateOf(IntSize.Zero) }
-    var imageRotation by remember { mutableStateOf(0) }
+    var imageRotation by remember { mutableIntStateOf(0) }
 
     val checkInTimestamps = remember { mutableStateMapOf<String, Long>() }
     val lastWaitSpokenTime = remember { mutableStateMapOf<String, Long>() } 
@@ -66,25 +82,37 @@ fun CheckInScreen(
     val tts = remember { mutableStateOf<TextToSpeech?>(null) }
     val toneGen = remember { ToneGenerator(AudioManager.STREAM_MUSIC, 100) }
 
+    // Initialize TTS
     LaunchedEffect(Unit) {
-        TextToSpeech(context) { status ->
+        val ttsObj = TextToSpeech(context) { status ->
             if (status == TextToSpeech.SUCCESS) {
                 tts.value?.language = Locale.US
                 tts.value?.setSpeechRate(1.1f)
             }
-        }.also { tts.value = it }
+        }
+        tts.value = ttsObj
+    }
+
+    // 🔄 COUNTDOWN LOGIC
+    LaunchedEffect(successCountdown) {
+        if (successCountdown > 0) {
+            delay(1000L)
+            successCountdown -= 1
+            if (successCountdown == 0) {
+                matchName = null
+                candidateName = null
+                stabilityCounter = 0
+            }
+        }
     }
 
     fun playSuccessSound() = toneGen.startTone(ToneGenerator.TONE_PROP_ACK, 150)
     fun speak(msg: String) = tts.value?.speak(msg, TextToSpeech.QUEUE_FLUSH, null, null)
 
-    // ✅ OPTIMIZATION: Load 500+ Students in Background Thread
+    // Load Gallery
     LaunchedEffect(Unit) {
         withContext(Dispatchers.IO) {
-            // Heavy DB operation happens here (Background)
             val loadedGallery = FaceCache.load(context)
-            
-            // UI Update happens here (Main Thread)
             withContext(Dispatchers.Main) {
                 gallery = loadedGallery
                 loading = false
@@ -94,27 +122,34 @@ fun CheckInScreen(
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         if (loading) {
-            // While loading in background, show this spinner
             CircularProgressIndicator(Modifier.align(Alignment.Center))
         } else {
-            FaceScanner(useBackCamera = currentCameraIsBack) { result ->
+            // 1. CAMERA LAYER (With Light Boost)
+            FaceScanner(
+                useBackCamera = currentCameraIsBack,
+                enableLightBoost = isLightBoostOn // 🚀 Pass the ISO state
+            ) { result ->
+                
+                if (isCoolingDown) return@FaceScanner
+
                 val now = System.currentTimeMillis()
                 val currentFace = result.bounds.firstOrNull()
 
-                // 1. TIMEOUT & RESET
+                // RESET IF FACE LOST
                 if (currentFace == null) {
-                    if (matchName != null) { matchName = null }
                     if (now - lastFaceDetectedTime > 1200) {
                         livenessState = 0
                         livenessMessage = "Position face"
                         verifiedEmbedding = null
-                        lastVerifiedBounds = null
+                        // Reset stability
+                        candidateName = null
+                        stabilityCounter = 0
                     }
                 } else {
                     lastFaceDetectedTime = now 
                 }
                 
-                // 2. LIVENESS DETECTION
+                // LIVENESS DETECTION
                 val eyesClosed = (result.leftEyeOpenProb ?: 1f) < 0.15f && (result.rightEyeOpenProb ?: 1f) < 0.15f
                 val eyesOpen = (result.leftEyeOpenProb ?: 0f) > 0.80f && (result.rightEyeOpenProb ?: 0f) > 0.80f
 
@@ -126,36 +161,34 @@ fun CheckInScreen(
                         nextLivenessState = 1 
                         nextLivenessMsg = "Blink detected..."
                     } else if (livenessState == 1 && eyesOpen) {
-                        // 🛡️ LOCK IDENTITY
                         nextLivenessState = 2 
                         nextLivenessMsg = "Verified ✅"
                         verifiedEmbedding = result.embeddings.first().second
-                        lastVerifiedBounds = currentFace
                         playSuccessSound()
-                        speak("Verified")
                     } else if (livenessState == 0) {
                         nextLivenessMsg = "Blink to verify"
                     }
                 }
 
-                // 3. RECOGNITION MATH
-                var calculatedBestName: String? = null
+                // RECOGNITION LOGIC
+                var confirmedName: String? = null
                 var shouldGreet = false
                 
                 if (result.embeddings.isNotEmpty() && nextLivenessState == 2 && verifiedEmbedding != null) {
                     val (_, currentEmbedding) = result.embeddings.first()
 
-                    // 🛡️ SECURITY CHECK 1: Identity Consistency
+                    // 1. Identity Check
                     val identityMatch = NativeMath.cosineDistance(verifiedEmbedding!!, currentEmbedding)
                     
-                    if (identityMatch > 0.25f) {
+                    if (identityMatch > 0.30f) { 
                         nextLivenessState = 0
                         nextLivenessMsg = "Identity mismatch! Re-blink"
                         verifiedEmbedding = null
+                        stabilityCounter = 0
                     } else {
-                        // 🛡️ SECURITY CHECK 2: Search Database
-                        var bestDist = Float.MAX_VALUE
-                        var secondBestDist = Float.MAX_VALUE
+                        // 2. DB Search
+                        var bestDist = 10f
+                        var secondBestDist = 10f
                         var bestName: String? = null
 
                         for ((name, dbEmbedding) in gallery) {
@@ -169,14 +202,31 @@ fun CheckInScreen(
                             }
                         }
 
-                        if (bestDist < 0.30f && (secondBestDist - bestDist) > 0.10f) {    
-                            calculatedBestName = bestName
-                            shouldGreet = true
+                        // 3. 🛡️ STRICT MATH CHECKS
+                        val THRESHOLD = 0.75f 
+                        val AMBIGUITY_GAP = 0.05f 
+                        
+                        if (bestDist < THRESHOLD && (secondBestDist - bestDist) > AMBIGUITY_GAP) {
+                            
+                            // 4. 🛡️ STABILITY CHECK
+                            if (bestName == candidateName) {
+                                stabilityCounter++
+                            } else {
+                                candidateName = bestName
+                                stabilityCounter = 1 
+                            }
+
+                            if (stabilityCounter >= REQUIRED_STABILITY) {
+                                confirmedName = bestName
+                                shouldGreet = true
+                            }
+                        } else {
+                            stabilityCounter = 0
                         }
                     }
                 }
 
-                // 4. UI & DB UPDATE
+                // STATE UPDATE
                 androidx.compose.runtime.snapshots.Snapshot.withMutableSnapshot {
                     faceBounds = result.bounds
                     imageSize = result.imageSize
@@ -184,70 +234,143 @@ fun CheckInScreen(
                     livenessState = nextLivenessState
                     livenessMessage = nextLivenessMsg
 
-                    if (shouldGreet && calculatedBestName != null) {
-                        val name = calculatedBestName!!
+                    if (shouldGreet && confirmedName != null) {
+                        val name = confirmedName!!
                         val lastCheck = checkInTimestamps[name] ?: 0L
                         val diff = now - lastCheck
                         val COOLDOWN_MS = 20_000L 
 
                         if (diff > COOLDOWN_MS) {
+                            // ✅ SUCCESS
                             checkInTimestamps[name] = now
                             viewModel.saveCheckIn(name) 
+                            
                             matchName = name
-                            isRegistered = true
                             alreadyCheckedIn = false
+                            
+                            // 🚀 Start Cooldown
+                            successCountdown = 3 
+                            
                             speak("Welcome $name")
-                            // Reset for next person
+                            
                             livenessState = 0 
                             verifiedEmbedding = null
+                            stabilityCounter = 0
+                            candidateName = null
                         } else {
+                            // ALREADY CHECKED IN
                             matchName = name
                             alreadyCheckedIn = true
                             secondsRemaining = ((COOLDOWN_MS - diff) / 1000).toInt().coerceAtLeast(0)
+                            
                             val lastSpoken = lastWaitSpokenTime[name] ?: 0L
                             if (now - lastSpoken > 10_000) {
                                 speak("Please wait")
                                 lastWaitSpokenTime[name] = now
                             }
                         }
-                    } else if (livenessState == 2 && calculatedBestName == null && result.embeddings.isNotEmpty()) {
-                        isRegistered = false
                     }
                 }
             }
 
-            // --- UI LAYERS ---
+            // 2. FACE BOX OVERLAY
             if (imageSize != IntSize.Zero) {
-                FaceOverlay(faceBounds, imageSize, imageRotation, !currentCameraIsBack, Modifier.fillMaxSize())
+                FaceOverlay(
+                    faceBounds = faceBounds, 
+                    imageSize = imageSize, 
+                    imageRotation = imageRotation, 
+                    isFrontCamera = !currentCameraIsBack, 
+                    modifier = Modifier.fillMaxSize()
+                )
             }
 
-            // TOP BAR UI
-            Column(
-                modifier = Modifier.fillMaxWidth().padding(top = 16.dp, start = 12.dp, end = 12.dp).align(Alignment.TopCenter),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
+            // 3. UI OVERLAYS
+            Box(Modifier.fillMaxSize().padding(16.dp)) {
+                
+                // TOP BAR
                 Row(
-                    modifier = Modifier.fillMaxWidth().background(Color.Black.copy(0.5f), RoundedCornerShape(24.dp)).padding(horizontal = 16.dp, vertical = 8.dp),
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .fillMaxWidth()
+                        .background(Color.Black.copy(0.5f), RoundedCornerShape(24.dp))
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("AZURA", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Black, letterSpacing = 2.sp, color = Color.White))
-                    Text(livenessMessage.uppercase(), style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, color = if (livenessState == 2) Color.Green else Color.Yellow))
-                    IconButton(onClick = { currentCameraIsBack = !currentCameraIsBack }, modifier = Modifier.size(32.dp)) {
-                        Icon(Icons.Default.CameraAlt, "Switch", tint = Color.White, modifier = Modifier.size(20.dp))
+                    Text("AZURA AI", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Black, color = Color.White))
+                    
+                    val statusText = if(isCoolingDown) "NEXT IN $successCountdown..." else livenessMessage.uppercase()
+                    val statusColor = if(isCoolingDown) Color.Cyan else if(livenessState == 2) Color.Green else Color.Yellow
+                    
+                    Text(statusText, style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, color = statusColor))
+                    
+                    // RIGHT: Controls (ISO & Switch)
+                    Row {
+                        // ☀️ ISO BUTTON
+                        IconButton(onClick = { isLightBoostOn = !isLightBoostOn }, modifier = Modifier.size(32.dp)) {
+                            Icon(
+                                imageVector = if (isLightBoostOn) Icons.Filled.WbSunny else Icons.Outlined.WbSunny,
+                                contentDescription = "Boost Light",
+                                tint = if (isLightBoostOn) Color.Yellow else Color.White
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.width(16.dp))
+
+                        IconButton(onClick = { currentCameraIsBack = !currentCameraIsBack }, modifier = Modifier.size(32.dp)) {
+                            Icon(Icons.Default.CameraAlt, "Switch", tint = Color.White)
+                        }
                     }
                 }
 
-                Spacer(modifier = Modifier.height(12.dp))
-
+                // BOTTOM CARD (Notification)
                 AnimatedVisibility(
                     visible = matchName != null,
-                    enter = slideInVertically(initialOffsetY = { -50 }) + fadeIn(),
-                    exit = slideOutVertically(targetOffsetY = { -50 }) + fadeOut()
+                    enter = slideInVertically(initialOffsetY = { 100 }) + fadeIn(),
+                    exit = slideOutVertically(targetOffsetY = { 100 }) + fadeOut(),
+                    modifier = Modifier.align(Alignment.BottomCenter)
                 ) {
                     val isWarning = alreadyCheckedIn
-                    Surface(shape = RoundedCornerShape(20.dp), color = if (isWarning) Color(0xFFFFC107) else Color(0xFF00BCD4), shadowElevation = 6.dp) {
-                        Text(text = if (isWarning) "COOLDOWN: ${secondsRemaining}s" else "SUCCESS: $matchName", modifier = Modifier.padding(horizontal = 24.dp, vertical = 6.dp), style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.ExtraBold, color = Color.Black))
+                    val cardColor = if (isWarning) Color(0xFFFFF3E0) else Color(0xFFE8F5E9)
+                    val borderColor = if (isWarning) Color(0xFFFF9800) else Color(0xFF4CAF50)
+
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = cardColor),
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 20.dp)
+                            .shadow(8.dp, RoundedCornerShape(16.dp))
+                            .border(2.dp, borderColor, RoundedCornerShape(16.dp))
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(16.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = if(isWarning) Icons.Default.Face else Icons.Default.CheckCircle,
+                                contentDescription = null,
+                                tint = borderColor,
+                                modifier = Modifier.size(40.dp)
+                            )
+                            Spacer(modifier = Modifier.width(16.dp))
+                            
+                            Column {
+                                Text(
+                                    text = if(isWarning) "ALREADY CHECKED IN" else "VERIFIED",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold, color = Color.Gray)
+                                )
+                                Text(
+                                    text = matchName ?: "Unknown",
+                                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.ExtraBold, color = Color.Black)
+                                )
+                                if (isWarning) {
+                                    Text("Wait ${secondsRemaining}s", style = MaterialTheme.typography.bodySmall.copy(color = Color.Red))
+                                } else if (isCoolingDown) {
+                                    Text("Next scan ready in ${successCountdown}s", style = MaterialTheme.typography.bodySmall.copy(color = borderColor))
+                                }
+                            }
+                        }
                     }
                 }
             }

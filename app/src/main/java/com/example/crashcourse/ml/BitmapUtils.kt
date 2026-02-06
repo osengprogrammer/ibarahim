@@ -1,131 +1,68 @@
 package com.example.crashcourse.ml
 
-import android.graphics.*
+import android.graphics.Rect
 import android.media.Image
-import androidx.core.graphics.scale
-import com.example.crashcourse.utils.NativeMath
-import java.io.ByteArrayOutputStream
+import com.example.crashcourse.ml.nativeutils.NativeImageProcessor
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
+/**
+ * =====================================================
+ * BITMAP UTILS - NATIVE OPTIMIZED VERSION
+ * =====================================================
+ * This object is now a high-speed bridge. It no longer 
+ * uses Android Bitmaps for the camera stream, which 
+ * saves RAM and prevents lag.
+ */
 object BitmapUtils {
-    private const val INPUT_SIZE = 160
-    private const val BYTES_PER_CHANNEL = 4
-
-    fun preprocessFace(image: Image, boundingBox: Rect, rotation: Int): ByteBuffer {
-        // 1. Convert YUV Camera Frame to Bitmap
-        val bitmap = yuvToRgb(image)
-        
-        // 2. Rotate and Crop
-        val matrix = Matrix().apply { postRotate(rotation.toFloat()) }
-        val rotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
-
-        val left = boundingBox.left.coerceIn(0, rotated.width - 1)
-        val top = boundingBox.top.coerceIn(0, rotated.height - 1)
-        val width = boundingBox.width().coerceAtMost(rotated.width - left)
-        val height = boundingBox.height().coerceAtMost(rotated.height - top)
-        
-        val faceBmp = if (width > 0 && height > 0) {
-            Bitmap.createBitmap(rotated, left, top, width, height)
-        } else {
-            rotated.scale(INPUT_SIZE, INPUT_SIZE)
-        }
-
-        // 3. Resize to Model Input Size (160x160)
-        val inputBmp = faceBmp.scale(INPUT_SIZE, INPUT_SIZE)
-
-        // 4. Allocate Direct Buffer (Crucial for C++ Access)
-        val buffer = ByteBuffer.allocateDirect(INPUT_SIZE * INPUT_SIZE * 3 * BYTES_PER_CHANNEL)
-            .order(ByteOrder.nativeOrder())
-            
-        val intVals = IntArray(INPUT_SIZE * INPUT_SIZE)
-        inputBmp.getPixels(intVals, 0, INPUT_SIZE, 0, 0, INPUT_SIZE, INPUT_SIZE)
-
-        // ====================================================================
-        // 🚀 NATIVE OPTIMIZATION START
-        // ====================================================================
-        
-        // Step A: Masukkan data mentah (0-255) ke buffer tanpa matematika
-        for (pixel in intVals) {
-            // Extract RGB channels directly
-            buffer.putFloat(((pixel shr 16) and 0xFF).toFloat()) // R
-            buffer.putFloat(((pixel shr 8) and 0xFF).toFloat())  // G
-            buffer.putFloat((pixel       and 0xFF).toFloat())    // B
-        }
-        
-        // Step B: Kembalikan posisi buffer ke awal
-        buffer.rewind()
-
-        // Step C: Panggil C++ untuk menghitung normalisasi (x - 127.5)/128.0
-        // Ini jauh lebih cepat daripada loop di Kotlin
-        NativeMath.preprocessImage(buffer, INPUT_SIZE * INPUT_SIZE * 3)
-        
-        // ====================================================================
-        // 🚀 NATIVE OPTIMIZATION END
-        // ====================================================================
-
-        return buffer
-    }
+    // ✅ Matches MobileFaceNet requirement
+    private const val INPUT_SIZE = 112 
+    private const val BYTES_PER_FLOAT = 4
 
     /**
-     * ✅ STRIDE-AWARE CONVERSION (CRITICAL FIX)
-     * This loop correctly skips the invisible padding bytes that were causing
-     * the "Static Noise" / False Positive bug.
+     * 🚀 FAST NATIVE PATH
+     * Directly processes YUV planes into a normalized Float buffer.
+     * * @param image The raw ImageProxy.image from the camera
+     * @param boundingBox The face location detected by ML Kit
+     * @param rotation The sensor rotation (usually 90 or 270)
+     * @param outputSize Targeted model input (112)
      */
-    private fun yuvToRgb(image: Image): Bitmap {
-        val yPlane = image.planes[0]
-        val uPlane = image.planes[1]
-        val vPlane = image.planes[2]
+    fun preprocessFace(
+        image: Image, 
+        boundingBox: Rect, 
+        rotation: Int,
+        outputSize: Int = INPUT_SIZE
+    ): ByteBuffer {
+        // 1. Allocate Direct Buffer (C++ requires Direct for address access)
+        // Size = 112 * 112 * 3 (RGB) * 4 (Float)
+        val buffer = ByteBuffer.allocateDirect(outputSize * outputSize * 3 * BYTES_PER_FLOAT)
+            .order(ByteOrder.nativeOrder())
 
-        val yBuffer = yPlane.buffer
-        val uBuffer = uPlane.buffer
-        val vBuffer = vPlane.buffer
-
-        val yRowStride = yPlane.rowStride
-        val uvRowStride = uPlane.rowStride
-        val uvPixelStride = uPlane.pixelStride
-        val width = image.width
-        val height = image.height
-
-        val nv21 = ByteArray(width * height * 3 / 2)
+        val planes = image.planes
         
-        // 1. Copy Y Plane Row-by-Row (Skips padding)
-        var pos = 0
-        for (row in 0 until height) {
-            yBuffer.position(row * yRowStride)
-            yBuffer.get(nv21, pos, width)
-            pos += width
-        }
+        // 2. 🚀 Call the C++ Engine (native_image.cpp)
+        // This function handles YUV->RGB, Cropping, Rotating, and Scaling in ONE pass.
+        NativeImageProcessor.preprocessFace(
+            yBuffer = planes[0].buffer,
+            uBuffer = planes[1].buffer,
+            vBuffer = planes[2].buffer,
+            width = image.width,
+            height = image.height,
+            yRowStride = planes[0].rowStride,
+            uvRowStride = planes[1].rowStride,
+            yPixelStride = planes[0].pixelStride,
+            uvPixelStride = planes[1].pixelStride,
+            cropLeft = boundingBox.left,
+            cropTop = boundingBox.top,
+            cropWidth = boundingBox.width(),
+            cropHeight = boundingBox.height(),
+            rotation = rotation,
+            outputSize = outputSize,
+            outBuffer = buffer
+        )
 
-        // 2. Interleave U/V
-        val uvHeight = height / 2
-        val uvWidth = width / 2
-        val vRow = ByteArray(uvRowStride)
-        val uRow = ByteArray(uvRowStride)
-
-        for (row in 0 until uvHeight) {
-            vBuffer.position(row * uvRowStride)
-            uBuffer.position(row * uvRowStride)
-            
-            val vLen = Math.min(uvRowStride, vBuffer.remaining())
-            vBuffer.get(vRow, 0, vLen)
-            
-            val uLen = Math.min(uvRowStride, uBuffer.remaining())
-            uBuffer.get(uRow, 0, uLen)
-
-            for (col in 0 until uvWidth) {
-                val index = col * uvPixelStride
-                if (index < vLen && index < uLen) {
-                    nv21[pos++] = vRow[index]
-                    nv21[pos++] = uRow[index]
-                }
-            }
-        }
-
-        val yuvImage = YuvImage(nv21, ImageFormat.NV21, width, height, null)
-        val out = ByteArrayOutputStream()
-        yuvImage.compressToJpeg(Rect(0, 0, width, height), 90, out)
-        val imageBytes = out.toByteArray()
-        return BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
+        // Reset pointer for TFLite reader
+        buffer.rewind()
+        return buffer
     }
 }

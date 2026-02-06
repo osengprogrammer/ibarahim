@@ -24,17 +24,16 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
+        // ✅ Tetap menjaga konfigurasi C++ agar ISO Key berjalan
         externalNativeBuild {
             cmake {
                 cppFlags += ""
+                abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
             }
-        }
-
-        ndk {
-            abiFilters += listOf("armeabi-v7a", "arm64-v8a")
         }
     }
 
+    // ✅ Jalur CMake untuk native_image.cpp
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
@@ -56,6 +55,7 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
+        // ✅ Wajib TRUE agar LocalDateTime tidak crash di Android lama
         isCoreLibraryDesugaringEnabled = true
     }
 
@@ -126,7 +126,7 @@ dependencies {
     // HTTP client for photo downloading
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
-    // Desugaring for LocalDateTime support on lower API levels
+    // ✅ Desugaring for LocalDateTime support on lower API levels
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
 
     // Testing
@@ -147,19 +147,10 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.6.2")
 
    // --- AZURATECH FIREBASE STACK (FIXED VERSION) ---
-    // Kita tidak pakai platform BoM dulu untuk sementara agar Gradle tidak bingung
-    
-    // Authentication
     implementation("com.google.firebase:firebase-auth-ktx:22.3.1")
-
-    // Firestore (Database)
     implementation("com.google.firebase:firebase-firestore-ktx:24.10.1")
-
-    // Analytics & Functions
     implementation("com.google.firebase:firebase-analytics-ktx:21.5.0")
     implementation("com.google.firebase:firebase-functions-ktx:20.4.0")
-    
-    // Jangan lupa common ktx untuk interoperabilitas coroutines
     implementation("com.google.firebase:firebase-common-ktx:20.4.2")
     implementation("com.google.code.gson:gson:2.10.1")
 }

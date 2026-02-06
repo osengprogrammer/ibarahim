@@ -30,7 +30,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.example.crashcourse.ml.FaceAnalyzer
-import com.example.crashcourse.ui.FaceOverlay
+import com.example.crashcourse.ui.components.FaceOverlay
 import com.example.crashcourse.ui.PermissionsHandler
 import com.example.crashcourse.utils.toBitmap
 import com.google.accompanist.permissions.ExperimentalPermissionsApi

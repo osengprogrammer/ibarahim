@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <string>
 
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "NativeImage", __VA_ARGS__)
 
@@ -23,10 +24,31 @@ extern "C" {
 
 /**
  * =====================================================
+ * 🛡️ LOGIC FOR: com.example.crashcourse.util.NativeKeyStore
+ * =====================================================
+ * Mengambil ISO Key rahasia untuk validasi Device ID.
+ */
+JNIEXPORT jstring JNICALL
+Java_com_example_crashcourse_util_NativeKeyStore_getIsoKey(
+    JNIEnv* env, jobject /* this */) {
+    
+    // Kita susun string "AZURA_SECURE_2024" secara manual
+    // agar tidak muncul sebagai plaintext "AZURA..." di hex editor.
+    std::string key = "";
+    key += 'A'; key += 'Z'; key += 'U'; key += 'R'; key += 'A';
+    key += '_';
+    key += 'S'; key += 'E'; key += 'C'; key += 'U'; key += 'R'; key += 'E';
+    key += '_';
+    key += '2'; key += '0'; key += '2'; key += '6'; // Update ke 2026 sesuai tahun sekarang
+    
+    return env->NewStringUTF(key.c_str());
+}
+
+/**
+ * =====================================================
  * LOGIC FOR: com.example.crashcourse.utils.NativeMath
  * =====================================================
  */
-
 JNIEXPORT jfloat JNICALL
 Java_com_example_crashcourse_utils_NativeMath_cosineDistance(
     JNIEnv* env, jobject /* this */, jfloatArray a, jfloatArray b) {
@@ -49,10 +71,11 @@ Java_com_example_crashcourse_utils_NativeMath_cosineDistance(
     env->ReleaseFloatArrayElements(b, ptrB, JNI_ABORT);
 
     float denom = std::sqrt(normA) * std::sqrt(normB);
-    if (denom == 0.0f) return 1.0f;
+    if (denom < 1e-6f) return 1.0f;
 
     float similarity = dot / denom;
     float sim = std::max(-1.0f, std::min(1.0f, similarity));
+    
     return 1.0f - sim;
 }
 
@@ -73,7 +96,6 @@ Java_com_example_crashcourse_utils_NativeMath_preprocessImage(
  * LOGIC FOR: com.example.crashcourse.ml.nativeutils.NativeImageProcessor
  * =====================================================
  */
-
 JNIEXPORT void JNICALL
 Java_com_example_crashcourse_ml_nativeutils_NativeImageProcessor_preprocessFace(
         JNIEnv *env, jobject, jobject yBuffer, jobject uBuffer, jobject vBuffer,
@@ -94,8 +116,8 @@ Java_com_example_crashcourse_ml_nativeutils_NativeImageProcessor_preprocessFace(
             float fx = (ox + 0.5f) / (float)outputSize;
             float fy = (oy + 0.5f) / (float)outputSize;
 
-            float sx = cropLeft + fx * cropWidth;
-            float sy = cropTop  + fy * cropHeight;
+            float sx = (float)cropLeft + fx * (float)cropWidth;
+            float sy = (float)cropTop  + fy * (float)cropHeight;
 
             float rx, ry;
             switch (rotation) {
@@ -107,19 +129,19 @@ Java_com_example_crashcourse_ml_nativeutils_NativeImageProcessor_preprocessFace(
 
             int x0 = clampInt((int)rx, 0, width - 2);
             int y0 = clampInt((int)ry, 0, height - 2);
-            float dx = rx - x0;
-            float dy = ry - y0;
+            float dx = rx - (float)x0;
+            float dy = ry - (float)y0;
 
             int r1 = y0 * yRowStride;
             int r2 = (y0 + 1) * yRowStride;
             
-            float v00 = Y_ptr[r1 + x0 * yPixelStride] & 0xFF;
-            float v10 = Y_ptr[r1 + (x0+1) * yPixelStride] & 0xFF;
-            float v01 = Y_ptr[r2 + x0 * yPixelStride] & 0xFF;
-            float v11 = Y_ptr[r2 + (x0+1) * yPixelStride] & 0xFF;
+            float v00 = (float)(Y_ptr[r1 + x0 * yPixelStride] & 0xFF);
+            float v10 = (float)(Y_ptr[r1 + (x0+1) * yPixelStride] & 0xFF);
+            float v01 = (float)(Y_ptr[r2 + x0 * yPixelStride] & 0xFF);
+            float v11 = (float)(Y_ptr[r2 + (x0+1) * yPixelStride] & 0xFF);
 
-            float y_interp = (v00 * (1-dx) * (1-dy)) + (v10 * dx * (1-dy)) +
-                             (v01 * (1-dx) * dy) + (v11 * dx * dy);
+            float y_interp = (v00 * (1.0f-dx) * (1.0f-dy)) + (v10 * dx * (1.0f-dy)) +
+                             (v01 * (1.0f-dx) * dy) + (v11 * dx * dy);
 
             int crX = clampInt((int)rx >> 1, 0, (width >> 1) - 1);
             int crY = clampInt((int)ry >> 1, 0, (height >> 1) - 1);
