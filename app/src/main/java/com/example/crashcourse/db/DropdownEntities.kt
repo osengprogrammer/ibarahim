@@ -4,63 +4,65 @@ import androidx.room.Entity
 import androidx.room.PrimaryKey
 
 /**
- * Entity for class options dropdown
+ * 🏛️ Entity untuk pilihan Kelas (Contoh: IPA 1, IPS 2)
  */
 @Entity(tableName = "class_options")
 data class ClassOption(
-    @PrimaryKey val id: Int = 0,
+    @PrimaryKey(autoGenerate = true) val id: Int = 0, // ✅ ID Otomatis
     val name: String,
     val displayOrder: Int = 0
 )
 
 /**
- * Entity for sub-class options dropdown
+ * 🏛️ Entity untuk Sub-Kelas (Contoh: Kelompok A, Kelompok B)
+ * Memiliki relasi ke ClassOption via parentClassId
  */
 @Entity(tableName = "subclass_options")
 data class SubClassOption(
-    @PrimaryKey val id: Int = 0,
+    @PrimaryKey(autoGenerate = true) val id: Int = 0, // ✅ ID Otomatis
     val name: String,
-    val parentClassId: Int, // References ClassOption.id
+    val parentClassId: Int, // Referensi ke ClassOption.id
     val displayOrder: Int = 0
 )
 
 /**
- * Entity for grade options dropdown
+ * 🏛️ Entity untuk Jenjang/Grade (Contoh: Grade 10, Grade 11)
  */
 @Entity(tableName = "grade_options")
 data class GradeOption(
-    @PrimaryKey val id: Int = 0,
+    @PrimaryKey(autoGenerate = true) val id: Int = 0, // ✅ ID Otomatis
     val name: String,
     val displayOrder: Int = 0
 )
 
 /**
- * Entity for sub-grade options dropdown
+ * 🏛️ Entity untuk Sub-Jenjang (Contoh: Level Foundation, Level Advanced)
+ * Memiliki relasi ke GradeOption via parentGradeId
  */
 @Entity(tableName = "subgrade_options")
 data class SubGradeOption(
-    @PrimaryKey val id: Int = 0,
+    @PrimaryKey(autoGenerate = true) val id: Int = 0, // ✅ ID Otomatis
     val name: String,
-    val parentGradeId: Int, // References GradeOption.id
+    val parentGradeId: Int, // Referensi ke GradeOption.id
     val displayOrder: Int = 0
 )
 
 /**
- * Entity for program options dropdown
+ * 🏛️ Entity untuk Pilihan Program (Contoh: Reguler, Boarding, Tahfidz)
  */
 @Entity(tableName = "program_options")
 data class ProgramOption(
-    @PrimaryKey val id: Int = 0,
+    @PrimaryKey(autoGenerate = true) val id: Int = 0, // ✅ ID Otomatis
     val name: String,
     val displayOrder: Int = 0
 )
 
 /**
- * Entity for role options dropdown
+ * 🏛️ Entity untuk Peran/Role (Contoh: Pengajar, Murid, Admin)
  */
 @Entity(tableName = "role_options")
 data class RoleOption(
-    @PrimaryKey val id: Int = 0,
+    @PrimaryKey(autoGenerate = true) val id: Int = 0, // ✅ ID Otomatis
     val name: String,
     val displayOrder: Int = 0
 )

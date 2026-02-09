@@ -7,7 +7,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
-import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.automirrored.filled.ArrowForward // Mengganti ChevronRight agar support RTL
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -20,21 +20,20 @@ import androidx.compose.ui.unit.dp
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
-    onLogout: () -> Unit, // ✅ Menggunakan callback logout dari MainActivity
-    onNavigateToForm: (String) -> Unit
+    onLogout: () -> Unit, 
+    onNavigateToMasterData: () -> Unit, // 🚀 Diganti agar mengarah ke OptionsManagementScreen
+    onNavigateToUserMan: () -> Unit // 🚀 Tambahan: Ke UserManagementScreen
 ) {
-    // Karena info sekolah sekarang ada di database Firebase User, 
-    // untuk sementara kita set label default. 
-    // Anda bisa mengembangkannya dengan mempassing nama sekolah ke sini nanti.
     val schoolName = "AzuraTech School" 
+    val appVersion = "v1.1 (Beta)"
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Pengaturan") },
+                title = { Text("Pengaturan", fontWeight = FontWeight.Bold) },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                    titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                    containerColor = MaterialTheme.colorScheme.surface,
+                    titleContentColor = MaterialTheme.colorScheme.onSurface
                 )
             )
         }
@@ -43,7 +42,7 @@ fun SettingsScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .background(MaterialTheme.colorScheme.surface)
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)) // Background agak abu sedikit
         ) {
             // --- BAGIAN 1: INFO STATUS AKUN ---
             item {
@@ -51,79 +50,91 @@ fun SettingsScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
                 ) {
                     Row(
                         modifier = Modifier.padding(16.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.School,
-                            contentDescription = null,
-                            modifier = Modifier.size(40.dp),
-                            tint = MaterialTheme.colorScheme.onSecondaryContainer
-                        )
+                        Surface(
+                            shape = RoundedCornerShape(50),
+                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.5f),
+                            modifier = Modifier.size(48.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.School,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                            }
+                        }
+                        
                         Spacer(modifier = Modifier.width(16.dp))
+                        
                         Column {
                             Text(
                                 text = schoolName,
                                 style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
                             )
                             Text(
-                                text = "Akun Terverifikasi",
+                                text = "Status: Admin Terverifikasi",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = Color(0xFF4CAF50) // Warna Hijau (Success)
+                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
                             )
                         }
                     }
                 }
             }
 
-            item {
-                Text(
-                    text = "Data Master",
-                    modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 8.dp),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.primary
-                )
+            // --- BAGIAN 2: MENU ADMIN ---
+            item { SectionHeader("Panel Admin") }
+
+            item { 
+                OptionItem(
+                    title = "Master Data (Kelas, Grade, Role)", 
+                    subtitle = "Atur struktur sekolah di sini",
+                    onClick = { onNavigateToMasterData() } // Ke OptionsManagementScreen
+                ) 
+            }
+            
+            item { 
+                OptionItem(
+                    title = "Manajemen Staff & Guru", 
+                    subtitle = "Tambah atau edit akses guru",
+                    onClick = { onNavigateToUserMan() } // Ke UserManagementScreen
+                ) 
             }
 
-            // Opsi-opsi standard
-            item { OptionItem("Daftar Kelas", onClick = { onNavigateToForm("class") }) }
-            item { OptionItem("Daftar Jurusan", onClick = { onNavigateToForm("major") }) }
-            item { OptionItem("Daftar Mata Pelajaran", onClick = { onNavigateToForm("subject") }) }
-
-            item {
-                Spacer(modifier = Modifier.height(24.dp))
-                Text(
-                    text = "Keamanan",
-                    modifier = Modifier.padding(start = 16.dp, bottom = 8.dp),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.error
-                )
+            // --- BAGIAN 3: KEAMANAN ---
+            item { 
+                Spacer(modifier = Modifier.height(16.dp))
+                SectionHeader("Akun & Keamanan") 
             }
 
-            // --- TOMBOL LOGOUT (Sistem Baru) ---
             item {
                 Button(
-                    onClick = { onLogout() }, // ✅ Memanggil fungsi logout pusat
+                    onClick = { onLogout() },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(16.dp),
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                    shape = RoundedCornerShape(8.dp)
+                    shape = RoundedCornerShape(12.dp),
+                    elevation = ButtonDefaults.buttonElevation(defaultElevation = 2.dp)
                 ) {
                     Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null)
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Keluar dari Akun")
+                    Text("Keluar Aplikasi")
                 }
             }
 
+            // --- FOOTER ---
             item {
-                Box(modifier = Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
+                Box(modifier = Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
                     Text(
-                        text = "Azura Attendance v1.1",
+                        text = "Azura Attendance $appVersion",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.outline
                     )
@@ -134,27 +145,48 @@ fun SettingsScreen(
 }
 
 @Composable
-private fun OptionItem(title: String, onClick: () -> Unit) {
+private fun SectionHeader(text: String) {
+    Text(
+        text = text,
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+        style = MaterialTheme.typography.labelMedium,
+        fontWeight = FontWeight.Bold,
+        color = MaterialTheme.colorScheme.primary
+    )
+}
+
+@Composable
+private fun OptionItem(title: String, subtitle: String? = null, onClick: () -> Unit) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 4.dp)
             .clickable { onClick() },
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {
         Row(
             modifier = Modifier.padding(16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = title,
-                modifier = Modifier.weight(1f),
-                style = MaterialTheme.typography.bodyLarge
-            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.Medium
+                )
+                if (subtitle != null) {
+                    Text(
+                        text = subtitle,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.Gray
+                    )
+                }
+            }
             Icon(
-                imageVector = Icons.Default.ChevronRight,
+                imageVector = Icons.AutoMirrored.Filled.ArrowForward,
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                tint = Color.Gray
             )
         }
     }

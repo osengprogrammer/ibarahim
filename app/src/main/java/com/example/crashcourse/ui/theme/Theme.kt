@@ -9,35 +9,37 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 
+// 🚀 Menggunakan palet warna Azura yang kita buat sebelumnya
 private val DarkColorScheme = darkColorScheme(
-    primary = Purple80,
-    secondary = PurpleGrey80,
-    tertiary = Pink80
+    primary = AzuraPrimary,
+    secondary = AzuraSecondary,
+    tertiary = AzuraAccent,
+    background = Color(0xFF121212), // Gelap modern
+    surface = Color(0xFF1E1E1E),
+    error = AzuraError
 )
 
 private val LightColorScheme = lightColorScheme(
-    primary = Purple40,
-    secondary = PurpleGrey40,
-    tertiary = Pink40
-
-    /* Other default colors to override
-    background = Color(0xFFFFFBFE),
-    surface = Color(0xFFFFFBFE),
+    primary = AzuraPrimary,
+    secondary = AzuraSecondary,
+    tertiary = AzuraAccent,
+    background = AzuraBg,
+    surface = Color.White,
+    error = AzuraError,
     onPrimary = Color.White,
     onSecondary = Color.White,
-    onTertiary = Color.White,
-    onBackground = Color(0xFF1C1B1F),
-    onSurface = Color(0xFF1C1B1F),
-    */
+    onBackground = AzuraText,
+    onSurface = AzuraText
 )
 
 @Composable
 fun CrashcourseTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
-    // Dynamic color is available on Android 12+
-    dynamicColor: Boolean = true,
+    // Set ke false jika ingin warna Azura murni (tidak mengikuti wallpaper HP)
+    dynamicColor: Boolean = false, 
     content: @Composable () -> Unit
 ) {
     val colorScheme = when {

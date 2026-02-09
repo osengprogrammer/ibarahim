@@ -1,6 +1,5 @@
 plugins {
     alias(libs.plugins.android.application)
-    // FIX: Mengikuti Project-level build.gradle
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
     id("com.google.devtools.ksp")
@@ -20,20 +19,30 @@ android {
         minSdk = 24
         targetSdk = 35
         versionCode = 1
-        versionName = "1.1" // Naikkan ke 1.1 untuk Auth System
+        versionName = "1.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        // ✅ Tetap menjaga konfigurasi C++ agar ISO Key berjalan
         externalNativeBuild {
             cmake {
                 cppFlags += ""
+                // ABI Filters tetap di sini untuk development
                 abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
             }
         }
     }
 
-    // ✅ Jalur CMake untuk native_image.cpp
+    // 🚀 1. KONFIGURASI ABI SPLITS (Memecah APK agar lebih ringan)
+    // Dengan ini, user hanya mendownload library sesuai CPU HP mereka.
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("armeabi-v7a", "arm64-v8a") // Standard HP Android sekolah
+            isUniversalApk = false // Set true jika ingin tetap punya satu APK raksasa untuk cadangan
+        }
+    }
+
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
@@ -44,18 +53,25 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // 🚀 2. AKTIFKAN MINIFICATION & SHRINKING
+            isMinifyEnabled = true 
+            isShrinkResources = true // Membuang file gambar/resource yang tidak dipanggil
+            
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+        }
+        
+        // Menambahkan config di debug agar bisa testing dengan performa mirip release
+        debug {
+            isMinifyEnabled = false
         }
     }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
-        // ✅ Wajib TRUE agar LocalDateTime tidak crash di Android lama
         isCoreLibraryDesugaringEnabled = true
     }
 
@@ -65,10 +81,6 @@ android {
 
     buildFeatures {
         compose = true
-    }
-
-    composeOptions {
-        // Otomatis dihandle oleh Kotlin 2.0+
     }
 
     androidResources {
@@ -81,10 +93,8 @@ android {
 }
 
 dependencies {
-    // AndroidX Core
+    // AndroidX & Compose
     implementation(libs.androidx.core.ktx)
-
-    // Compose
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(platform(libs.androidx.compose.bom))
@@ -93,10 +103,8 @@ dependencies {
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
 
-    // Navigation
+    // Navigation & Icons
     implementation("androidx.navigation:navigation-compose:2.7.7")
-
-    // Icons
     implementation("androidx.compose.material:material-icons-core")
     implementation("androidx.compose.material:material-icons-extended")
 
@@ -117,16 +125,12 @@ dependencies {
     implementation(libs.tensorflow.lite)
     implementation(libs.tensorflow.lite.support)
 
-    // Permissions
+    // Permissions & Image Loading
     implementation(libs.accompanist.permissions)
-
-    // Image loading
     implementation("io.coil-kt:coil-compose:2.5.0")
-
-    // HTTP client for photo downloading
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
 
-    // ✅ Desugaring for LocalDateTime support on lower API levels
+    // Desugaring
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
 
     // Testing
@@ -138,15 +142,15 @@ dependencies {
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
 
-    // PDF and CSV export
+    // PDF & CSV
     implementation("com.itextpdf:itext7-core:7.2.5")
     implementation("com.opencsv:opencsv:5.7.1")
 
-    // Lifecycle Compose Support
+    // Lifecycle Support
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.6.2")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.6.2")
 
-   // --- AZURATECH FIREBASE STACK (FIXED VERSION) ---
+    // Firebase
     implementation("com.google.firebase:firebase-auth-ktx:22.3.1")
     implementation("com.google.firebase:firebase-firestore-ktx:24.10.1")
     implementation("com.google.firebase:firebase-analytics-ktx:21.5.0")

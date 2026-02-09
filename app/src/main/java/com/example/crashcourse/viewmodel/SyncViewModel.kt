@@ -19,38 +19,39 @@ class SyncViewModel(application: Application) : AndroidViewModel(application) {
 
     /**
      * 🔥 UPDATED: Sync Down with Teacher Scope
-     * @param uid The UID of the currently logged-in teacher/admin
+     * Mengunduh data siswa dari Cloud ke HP, disaring berdasarkan hak akses guru.
      */
     fun syncStudentsDown(uid: String) {
         viewModelScope.launch(Dispatchers.IO) {
+            // 1. Validasi UID
             if (uid.isBlank()) {
                 _syncState.value = SyncState.Error("User ID tidak valid. Silakan login ulang.")
                 return@launch
             }
 
-            _syncState.value = SyncState.Loading("Mengecek skop kelas Anda...")
+            _syncState.value = SyncState.Loading("Mengecek data kelas Anda...")
 
             try {
-                // 1. Download dari Firestore berdasarkan SCOPE
-                // Fungsi ini otomatis cek Role & assigned_classes di Firestore
+                // 2. Download dari Firestore (Auto Scope: Admin ambil semua, Guru ambil kelasnya saja)
                 val cloudStudents = FirestoreHelper.getScopedStudentsFromFirestore(uid)
                 
                 if (cloudStudents.isEmpty()) {
-                    _syncState.value = SyncState.Error("Tidak ada data murid untuk skop kelas Anda.")
+                    // Kita anggap Sukses tapi kosong, agar user tidak panik dikira error
+                    _syncState.value = SyncState.Success("Data tersinkronisasi (Tidak ada murid ditemukan).")
                     return@launch
                 }
 
-                _syncState.value = SyncState.Loading("Sinkronisasi ${cloudStudents.size} data...")
+                _syncState.value = SyncState.Loading("Menyimpan ${cloudStudents.size} data murid...")
 
-                // 2. Simpan ke Local Room
-                cloudStudents.forEach { student ->
-                    faceDao.insert(student)
-                }
+                // 3. 🚀 OPTIMASI: Batch Insert
+                // Menggunakan insertAll jauh lebih cepat daripada looping satu per satu
+                faceDao.insertAll(cloudStudents)
 
-                // 3. Refresh Cache Wajah untuk Recognition Engine (C++)
+                // 4. Refresh Cache Wajah (Penting untuk C++ Engine)
+                // Pastikan ini berjalan agar murid yang baru didownload langsung bisa dikenali
                 FaceCache.refresh(getApplication())
 
-                _syncState.value = SyncState.Success("Berhasil! ${cloudStudents.size} murid tersinkronisasi.")
+                _syncState.value = SyncState.Success("Selesai! ${cloudStudents.size} murid berhasil didownload.")
             } catch (e: Exception) {
                 _syncState.value = SyncState.Error("Gagal Sync: ${e.message}")
             }
@@ -62,6 +63,7 @@ class SyncViewModel(application: Application) : AndroidViewModel(application) {
     }
 }
 
+// State Management untuk UI (Loading/Success/Error)
 sealed class SyncState {
     object Idle : SyncState()
     data class Loading(val message: String) : SyncState()

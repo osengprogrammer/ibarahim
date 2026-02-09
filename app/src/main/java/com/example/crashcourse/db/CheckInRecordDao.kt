@@ -7,46 +7,47 @@ import java.time.LocalDateTime
 @Dao
 interface CheckInRecordDao {
 
-    @Query("SELECT * FROM check_in_records ORDER BY timestamp DESC")
-    fun getAllRecords(): Flow<List<CheckInRecord>>
-
-    @Query("""
-        SELECT * FROM check_in_records 
-        WHERE 
-            (name LIKE '%' || :nameFilter || '%' OR :nameFilter = '')
-            AND (timestamp >= :startDate OR :startDate IS NULL)
-            AND (timestamp <= :endDate OR :endDate IS NULL)
-            -- Filter ID (Untuk akurasi data master)
-            AND (classId = :classId OR :classId IS NULL)
-            -- 🔥 TAMBAHAN: Filter Nama (Penyelamat jika ID kosong)
-            AND (className = :className OR :className IS NULL OR :className = '')
-            
-            AND (subClassId = :subClassId OR :subClassId IS NULL)
-            AND (gradeId = :gradeId OR :gradeId IS NULL)
-            AND (subGradeId = :subGradeId OR :subGradeId IS NULL)
-            AND (programId = :programId OR :programId IS NULL)
-            AND (roleId = :roleId OR :roleId IS NULL)
-        ORDER BY timestamp DESC
-    """)
-    fun getFilteredRecords(
-        nameFilter: String,
-        startDate: LocalDateTime?,
-        endDate: LocalDateTime?,
-        classId: Int?,
-        className: String?, // ✅ Tambahkan parameter ini
-        subClassId: Int?,
-        gradeId: Int?,
-        subGradeId: Int?,
-        programId: Int?,
-        roleId: Int?
-    ): Flow<List<CheckInRecord>>
+    // --- 📝 CRUD STANDAR ---
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insert(record: CheckInRecord)
+    suspend fun insert(record: CheckInRecord): Long 
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(records: List<CheckInRecord>)
 
     @Update
     suspend fun update(record: CheckInRecord)
 
     @Delete
     suspend fun delete(record: CheckInRecord)
+
+    // --- 🛡️ VALIDASI & LOGIC (Anti-Duplicate) ---
+
+    @Query("SELECT COUNT(*) FROM check_in_records WHERE studentId = :studentId AND timestamp = :timestamp")
+    suspend fun checkIfExist(studentId: String, timestamp: LocalDateTime): Int
+
+    @Query("SELECT MAX(timestamp) FROM check_in_records WHERE studentId = :studentId")
+    suspend fun getLastTimestampByStudentId(studentId: String): LocalDateTime?
+
+    // --- 🚀 BATCH OPTIMIZATION (REQUIRED FOR VIEWMODEL) ---
+    // Fungsi ini WAJIB ADA untuk ViewModel 'fetchHistoricalData' dan 'startSmartSync'
+    // Gunanya untuk mengambil data dalam rentang waktu sekaligus (Batch)
+    @Query("SELECT * FROM check_in_records WHERE timestamp BETWEEN :start AND :end")
+    suspend fun getRecordsBetween(start: LocalDateTime, end: LocalDateTime): List<CheckInRecord>
+
+    // --- 🔍 QUERY UTAMA ---
+
+    @Query("SELECT * FROM check_in_records ORDER BY timestamp DESC")
+    fun getAllRecords(): Flow<List<CheckInRecord>>
+
+    @Query("SELECT * FROM check_in_records WHERE status = :status")
+    fun getRecordsByStatus(status: String): Flow<List<CheckInRecord>>
+
+    // --- ⚙️ UTILITAS ---
+
+    @Query("DELETE FROM check_in_records")
+    suspend fun deleteAll()
+
+    @Query("SELECT COUNT(*) FROM check_in_records")
+    suspend fun getCount(): Int
 }

@@ -2,26 +2,35 @@ package com.example.crashcourse.ui
 
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigation.NavDestination.Companion.hierarchy
+import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.*
+
+// --- IMPORT INTERNAL ---
 import com.example.crashcourse.navigation.Screen
 import com.example.crashcourse.navigation.addAppManagementGraph
 import com.example.crashcourse.ui.add.AddUserScreen
 import com.example.crashcourse.ui.add.BulkRegistrationScreen
-import com.example.crashcourse.ui.edit.EditUserScreen
+import com.example.crashcourse.ui.add.SingleUploadScreen
+import com.example.crashcourse.ui.checkin.CheckInScreen
+import com.example.crashcourse.ui.menu.RegistrationMenuScreen
+import com.example.crashcourse.ui.AdminDashboardScreen
+import com.example.crashcourse.ui.LiveAttendanceScreen
+
 import com.example.crashcourse.viewmodel.AuthState
 import com.example.crashcourse.viewmodel.AuthViewModel
 import com.example.crashcourse.viewmodel.FaceViewModel
+import com.example.crashcourse.ui.theme.AzuraPrimary
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -30,119 +39,108 @@ fun MainScreen(
     onLogout: () -> Unit
 ) {
     val navController = rememberNavController()
-    var useBackCamera by remember { mutableStateOf(false) }
+    val useBackCamera by remember { mutableStateOf(false) }
     
+    // Shared ViewModels agar data pendaftaran wajah konsisten
     val sharedFaceViewModel: FaceViewModel = viewModel()
     val authViewModel: AuthViewModel = viewModel() 
 
     val isAdmin = authState.role == "ADMIN"
-    // Guru (USER/SUPERVISOR) sekarang diizinkan melihat list murid
-    val canViewStudentList = authState.role == "ADMIN" || authState.role == "USER" || authState.role == "SUPERVISOR"
 
     Scaffold(
         bottomBar = { 
             BottomNav(navController, authState.role) 
-        }
+        },
+        containerColor = MaterialTheme.colorScheme.background
     ) { paddingValues ->
         NavHost(
             navController = navController,
             startDestination = Screen.CheckIn.route,
-            modifier = Modifier.padding(paddingValues)
+            modifier = Modifier.padding(paddingValues),
+            enterTransition = { androidx.compose.animation.fadeIn() },
+            exitTransition = { androidx.compose.animation.fadeOut() }
         ) {
-            // 1. Check In (Absensi)
+            // ==========================================
+            // 1. UTAMA (ABSENSI)
+            // ==========================================
             composable(Screen.CheckIn.route) {
                 CheckInScreen(useBackCamera = useBackCamera)
             }
 
-            // 2. Admin Dashboard (Konfigurasi Sistem)
+            // ==========================================
+            // 2. ADMIN & MONITORING
+            // ==========================================
+            
             composable(Screen.AdminDashboard.route) {
                 if (isAdmin) {
-                    AdminDashboardScreen(navController)
+                    AdminDashboardScreen(navController = navController)
                 } else {
-                    AccessDeniedScreen("Hanya Admin yang dapat mengakses Dashboard.")
+                    AccessDeniedScreen()
                 }
             }
 
-            // 3. Live Monitoring
             composable(Screen.LiveMonitor.route) {
                 if (isAdmin) {
-                    LiveAttendanceScreen(
-                        onBack = { navController.popBackStack() }
+                    LiveAttendanceScreen(onBack = { navController.popBackStack() })
+                } else {
+                    AccessDeniedScreen()
+                }
+            }
+
+            // ==========================================
+            // 3. REGISTRASI SISWA (FLOW)
+            // ==========================================
+            
+            composable(Screen.RegistrationMenu.route) {
+                if (isAdmin) {
+                    RegistrationMenuScreen(
+                        onNavigateBack = { navController.popBackStack() },
+                        onNavigateToAddUser = { navController.navigate(Screen.AddUser.route) },
+                        onNavigateToBulkRegister = { navController.navigate(Screen.BulkRegister.route) },
+                        onNavigateToSingleUpload = { navController.navigate(Screen.SingleUpload.route) }
                     )
                 } else {
                     AccessDeniedScreen()
                 }
             }
 
-            // 4. Registration Menu (Menu Pilihan Tambah Murid)
-            composable(Screen.RegistrationMenu.route) {
-                if (isAdmin) {
-                    RegistrationMenuScreen(
-                        onNavigateToBulkRegister = { navController.navigate(Screen.BulkRegister.route) },
-                        onNavigateToAddUser = { navController.navigate(Screen.AddUser.route) }
-                    )
-                } else {
-                    AccessDeniedScreen("Pendaftaran murid hanya dilakukan oleh Admin.")
-                }
-            }
-
-            // 5. Single Add User
             composable(Screen.AddUser.route) {
                 if (isAdmin) {
                     AddUserScreen(
                         onNavigateBack = { navController.popBackStack() },
-                        onUserAdded = { },
+                        onUserAdded = { navController.popBackStack() },
                         viewModel = sharedFaceViewModel
                     )
                 }
             }
 
-            // 6. Bulk Register
             composable(Screen.BulkRegister.route) {
                 if (isAdmin) {
-                    BulkRegistrationScreen(faceViewModel = sharedFaceViewModel)
-                }
-            }
-
-            // 7. Manage Faces (Daftar Murid) 🔥 UPDATED
-            composable(Screen.Manage.route) {
-                if (canViewStudentList) { 
-                    FaceListScreen(
-                        authState = authState, 
-                        viewModel = sharedFaceViewModel,
-                        onEditUser = { user ->
-                            // PROTEKSI: Navigasi ke Edit hanya jalan jika Role adalah ADMIN
-                            if (isAdmin) {
-                                navController.navigate(Screen.EditUser.createRoute(user.studentId))
-                            }
-                        }
+                    BulkRegistrationScreen(
+                        bulkViewModel = viewModel(),
+                        onNavigateBack = { navController.popBackStack() }
                     )
-                } else {
-                    AccessDeniedScreen()
                 }
             }
 
-            // 8. Edit User (Halaman Edit Detail & Foto)
-            composable(Screen.EditUser.route) { backStackEntry ->
-                val studentId = backStackEntry.arguments?.getString("studentId") ?: ""
+            composable(Screen.SingleUpload.route) {
                 if (isAdmin) {
-                    EditUserScreen(
-                        studentId = studentId,
-                        useBackCamera = useBackCamera,
+                    SingleUploadScreen(
                         onNavigateBack = { navController.popBackStack() },
-                        onUserUpdated = { },
-                        faceViewModel = sharedFaceViewModel
+                        onUserAdded = { navController.popBackStack() },
+                        viewModel = sharedFaceViewModel
                     )
-                } else {
-                    AccessDeniedScreen("Anda tidak memiliki izin untuk mengedit data biometrik.")
                 }
             }
 
-            // 9. Management Graph (Profile, Records, Options)
+            // ==========================================
+            // 4. GRAPH MODULAR (Manajemen & Pengaturan)
+            // ==========================================
             addAppManagementGraph(
                 navController = navController,
                 authState = authState,
-                authViewModel = authViewModel
+                authViewModel = authViewModel,
+                onLogout = onLogout
             )
         }
     }
@@ -150,45 +148,41 @@ fun MainScreen(
 
 @Composable
 fun BottomNav(navController: NavHostController, role: String) {
-    val items = remember(role) {
-        val list = mutableListOf<Pair<Screen, String>>(
-            Screen.CheckIn to "Absensi"
-        )
-        
-        // Riwayat Absensi untuk Admin & Supervisor
-        if (role == "SUPERVISOR" || role == "ADMIN") {
-            list.add(Screen.CheckInRecord to "Riwayat")
-        }
-
-        // Daftar Murid dimunculkan untuk Guru agar bisa monitoring
-        if (role == "USER" || role == "SUPERVISOR" || role == "ADMIN") {
-            list.add(Screen.Manage to "Murid")
-        }
-
-        if (role == "ADMIN") {
-            list.add(Screen.AdminDashboard to "Admin")
-        }
-        
-        list.add(Screen.Profile to "Profil")
-        list
-    }
-    
     val navBackStackEntry by navController.currentBackStackEntryAsState()
-    val currentRoute = navBackStackEntry?.destination?.route
+    val currentDestination = navBackStackEntry?.destination
+
+    val items = remember(role) {
+        mutableListOf<Pair<Screen, String>>().apply {
+            add(Screen.CheckIn to "Absensi")
+            if (role == "ADMIN" || role == "SUPERVISOR") {
+                add(Screen.CheckInRecord to "Riwayat")
+            }
+            if (role == "ADMIN") {
+                add(Screen.AdminDashboard to "Admin")
+            }
+            add(Screen.Settings to "Pengaturan")
+        }
+    }
 
     NavigationBar(
         containerColor = MaterialTheme.colorScheme.surface,
-        tonalElevation = 8.dp
+        tonalElevation = 12.dp,
+        modifier = Modifier.windowInsetsPadding(WindowInsets.navigationBars)
     ) {
         items.forEach { (screen, label) ->
-            val selected = currentRoute == screen.route
+            // Cek hierarki rute agar icon tetap menyala di sub-menu
+            val selected = currentDestination?.hierarchy?.any { it.route == screen.route } == true ||
+                           (screen == Screen.AdminDashboard && currentDestination?.route?.contains("registration") == true)
+            
             NavigationBarItem(
                 selected = selected,
                 onClick = {
                     navController.navigate(screen.route) {
-                        popUpTo(navController.graph.startDestinationId) { saveState = true }
+                        popUpTo(navController.graph.findStartDestination().id) {
+                            saveState = true 
+                        }
                         launchSingleTop = true
-                        restoreState = true
+                        restoreState = true 
                     }
                 },
                 icon = {
@@ -196,35 +190,47 @@ fun BottomNav(navController: NavHostController, role: String) {
                         imageVector = when (screen) {
                             Screen.CheckIn -> Icons.Default.Fingerprint
                             Screen.CheckInRecord -> Icons.Default.History
-                            Screen.Manage -> Icons.Default.People // Ikon Murid
                             Screen.AdminDashboard -> Icons.Default.AdminPanelSettings
-                            Screen.Profile -> Icons.Default.AccountCircle
+                            Screen.Settings -> Icons.Default.Settings
                             else -> Icons.Default.Circle
                         },
                         contentDescription = label
                     )
                 },
                 label = { Text(label, style = MaterialTheme.typography.labelSmall) },
-                alwaysShowLabel = true
+                colors = NavigationBarItemDefaults.colors(
+                    selectedIconColor = AzuraPrimary,
+                    selectedTextColor = AzuraPrimary,
+                    indicatorColor = AzuraPrimary.copy(alpha = 0.1f)
+                )
             )
         }
     }
 }
 
+/**
+ * Komponen UI untuk menampilkan pesan jika akses ditolak.
+ * Dibuat publik agar bisa digunakan di file navigasi (addAppManagementGraph).
+ */
 @Composable
-fun AccessDeniedScreen(message: String = "Akses Terbatas.") {
+fun AccessDeniedScreen(message: String = "Akses Terbatas: Hanya Admin.") {
     Box(
         modifier = Modifier.fillMaxSize(), 
         contentAlignment = Alignment.Center
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(24.dp)) {
-            Icon(Icons.Default.Lock, null, modifier = Modifier.size(64.dp), tint = MaterialTheme.colorScheme.error)
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(
+                imageVector = Icons.Default.Lock, 
+                contentDescription = null, 
+                modifier = Modifier.size(64.dp), 
+                tint = MaterialTheme.colorScheme.error
+            )
             Spacer(modifier = Modifier.height(16.dp))
             Text(
                 text = message, 
-                color = MaterialTheme.colorScheme.error,
-                textAlign = TextAlign.Center,
-                style = MaterialTheme.typography.headlineSmall
+                color = MaterialTheme.colorScheme.error, 
+                style = MaterialTheme.typography.headlineSmall,
+                textAlign = TextAlign.Center
             )
         }
     }

@@ -4,23 +4,16 @@ import android.Manifest
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
-import androidx.camera.core.Camera
-import androidx.camera.core.CameraSelector
-import androidx.camera.core.ImageAnalysis
-import androidx.camera.core.Preview
+import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
+import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -32,16 +25,18 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.example.crashcourse.ml.FaceAnalyzer
 import com.example.crashcourse.ui.PermissionsHandler
+import com.example.crashcourse.ui.theme.* // 🚀 Import Azura Theme
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.rememberPermissionState
 import com.google.accompanist.permissions.isGranted
 import java.util.concurrent.Executors
+import androidx.compose.foundation.BorderStroke // 🚀 Pastikan ada
 
 @OptIn(ExperimentalPermissionsApi::class)
 @Composable
 fun FaceScanner(
     useBackCamera: Boolean = false,
-    enableLightBoost: Boolean = false, // 🚀 NEW: ISO/Brightness Control
+    enableLightBoost: Boolean = false,
     onResult: (FaceAnalyzer.FaceResult) -> Unit
 ) {
     val context = LocalContext.current
@@ -49,15 +44,14 @@ fun FaceScanner(
     val cameraPermissionState = rememberPermissionState(Manifest.permission.CAMERA)
 
     var showLowLightWarning by remember { mutableStateOf(false) }
-    var camera by remember { mutableStateOf<Camera?>(null) } // 🚀 Capture Camera Ref
+    var camera by remember { mutableStateOf<Camera?>(null) }
 
-    // 🚀 CONTROL ISO/EXPOSURE
+    // 🚀 CONTROL ISO/EXPOSURE (Optimized)
     LaunchedEffect(camera, enableLightBoost) {
         camera?.cameraControl?.let { control ->
             val exposureState = camera?.cameraInfo?.exposureState
             if (exposureState != null && exposureState.isExposureCompensationSupported) {
                 val range = exposureState.exposureCompensationRange
-                // If boost is ON, set to Max Brightness. If OFF, set to 0 (Normal).
                 val targetIndex = if (enableLightBoost) range.upper else 0
                 control.setExposureCompensationIndex(targetIndex)
             }
@@ -95,8 +89,6 @@ fun FaceScanner(
 
                     val selector = if (useBackCamera) CameraSelector.DEFAULT_BACK_CAMERA else CameraSelector.DEFAULT_FRONT_CAMERA
                     cameraProvider.unbindAll()
-                    
-                    // 🚀 Save Camera Reference
                     camera = cameraProvider.bindToLifecycle(lifecycleOwner, selector, preview, analysis)
                     
                 } catch (e: Exception) {
@@ -108,29 +100,47 @@ fun FaceScanner(
         Box(Modifier.fillMaxSize()) { 
             AndroidView(factory = { previewView }, modifier = Modifier.fillMaxSize()) 
             
-            // Only show warning if Boost is OFF. If Boost is ON, we assume user knows.
+            // 🚀 AZURA STYLE: Low Light Warning Overlay
             AnimatedVisibility(
                 visible = showLowLightWarning && !enableLightBoost,
-                enter = fadeIn(),
-                exit = fadeOut(),
+                enter = fadeIn() + slideInVertically { it / 2 },
+                exit = fadeOut() + slideOutVertically { it / 2 },
                 modifier = Modifier.align(Alignment.Center)
             ) {
-                Box(
-                    modifier = Modifier
-                        .background(Color.Black.copy(alpha = 0.7f), RoundedCornerShape(12.dp))
-                        .padding(horizontal = 24.dp, vertical = 16.dp),
-                    contentAlignment = Alignment.Center
+                Surface(
+                    color = Color.Black.copy(alpha = 0.8f),
+                    shape = RoundedCornerShape(24.dp),
+                    border = BorderStroke(1.dp, AzuraAccent.copy(alpha = 0.5f)),
+                    modifier = Modifier.padding(24.dp)
                 ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Column(
+                        modifier = Modifier.padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        // Pakai Azura Error/Yellow untuk perhatian
                         Icon(
                             imageVector = Icons.Default.Warning,
                             contentDescription = "Low Light",
                             tint = Color.Yellow,
                             modifier = Modifier.size(48.dp)
                         )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text("Too Dark", color = Color.White, fontWeight = FontWeight.Bold)
-                        Text("Try the Light Boost button", color = Color.White.copy(alpha = 0.8f), style = MaterialTheme.typography.bodySmall)
+                        Spacer(modifier = Modifier.height(16.dp))
+                        
+                        // Gunakan Typography Azura
+                        Text(
+                            text = "CAHAYA MINIM",
+                            style = MaterialTheme.typography.titleMedium.copy(
+                                fontWeight = FontWeight.Black,
+                                color = Color.White
+                            )
+                        )
+                        Text(
+                            text = "Aktifkan Light Boost untuk scan lebih cepat",
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                color = Color.White.copy(alpha = 0.7f)
+                            ),
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        )
                     }
                 }
             }

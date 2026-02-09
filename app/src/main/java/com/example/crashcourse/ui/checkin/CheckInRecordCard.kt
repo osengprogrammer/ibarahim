@@ -4,86 +4,71 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
-import com.example.crashcourse.db.*
-import com.example.crashcourse.viewmodel.OptionsViewModel
+import com.example.crashcourse.db.CheckInRecord
+import com.example.crashcourse.ui.theme.*
 import java.time.format.DateTimeFormatter
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun CheckInRecordCard(
     record: CheckInRecord,
-    onLongClick: () -> Unit // Dibutuhkan untuk memicu dialog Edit/Delete
+    subClassName: String? = null,
+    subGradeName: String? = null,
+    programName: String? = null,
+    onLongClick: () -> Unit
 ) {
-    val optionsViewModel: OptionsViewModel = viewModel()
-    
-    // 1. Collect Options dari Flow (Lokal Room)
-    val subClassOptions by optionsViewModel.subClassOptions.collectAsStateWithLifecycle(emptyList())
-    val subGradeOptions by optionsViewModel.subGradeOptions.collectAsStateWithLifecycle(emptyList())
-    val programOptions by optionsViewModel.programOptions.collectAsStateWithLifecycle(emptyList())
-    val roleOptions by optionsViewModel.roleOptions.collectAsStateWithLifecycle(emptyList())
-    
-    // 2. Lookup Nama berdasarkan ID yang tersimpan di record
-    val subClassName = remember(record.subClassId, subClassOptions) {
-        subClassOptions.find { it.id == record.subClassId }?.name
-    }
-    val subGradeName = remember(record.subGradeId, subGradeOptions) {
-        subGradeOptions.find { it.id == record.subGradeId }?.name
-    }
-    val programName = remember(record.programId, programOptions) {
-        programOptions.find { it.id == record.programId }?.name
-    }
-    val roleName = remember(record.roleId, roleOptions) {
-        roleOptions.find { it.id == record.roleId }?.name
-    }
-
-    // 3. Tentukan Warna Badge berdasarkan Status (S, I, A, P)
-    val statusColor = when (record.status) {
-        "PRESENT" -> Color(0xFF4CAF50) // Hijau
-        "SAKIT" -> Color(0xFFFFC107)   // Kuning
-        "IZIN" -> Color(0xFF2196F3)    // Biru
-        "ALPHA" -> Color(0xFFF44336)   // Merah
+    // Warna Status
+    val statusColor = when (record.status.uppercase()) {
+        "PRESENT" -> AzuraSuccess
+        "SAKIT" -> Color(0xFFFFC107) 
+        "IZIN" -> AzuraSecondary
+        "ALPHA" -> AzuraError
         else -> Color.Gray
     }
 
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp, horizontal = 8.dp)
-            // ✅ Menggunakan combinedClickable agar bisa tekan lama untuk EDIT
-            .combinedClickable(
-                onClick = { /* Bisa ditambahkan navigasi ke detail jika perlu */ },
-                onLongClick = onLongClick
-            ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+            .padding(vertical = 4.dp, horizontal = 12.dp)
+            .shadow(4.dp, RoundedCornerShape(16.dp)),
+        shape = RoundedCornerShape(16.dp),
+        // 🚀 KITA PAKAI WARNA GELAP UNTUK KARTU (Surface/Dark)
+        colors = CardDefaults.cardColors(
+            containerColor = Color(0xFF1E1E1E) // Hitam Elegan
+        )
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .combinedClickable(
+                    onClick = { /* Detail */ },
+                    onLongClick = onLongClick
+                )
                 .padding(16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Badge Status Lingkaran
+            // --- 1. STATUS BADGE ---
             Surface(
                 color = statusColor,
                 shape = CircleShape,
-                modifier = Modifier.size(42.dp)
+                modifier = Modifier.size(46.dp)
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Text(
-                        text = record.status.take(1),
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold,
+                        text = record.status.take(1).uppercase(),
+                        color = Color.White, // Tetap putih
+                        fontWeight = FontWeight.Black,
                         style = MaterialTheme.typography.titleMedium
                     )
                 }
@@ -91,76 +76,71 @@ fun CheckInRecordCard(
 
             Spacer(modifier = Modifier.width(16.dp))
 
+            // --- 2. STUDENT INFO (TEXT WARNA PUTIH) ---
             Column(modifier = Modifier.weight(1f)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
+                    // 🚀 NAMA SISWA - SEKARANG PUTIH!
                     Text(
-                        text = record.name,
+                        text = if (record.name.isNotBlank()) record.name else "ID: ${record.studentId}",
                         style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White, // 🔥 GANTI KE PUTIH
+                        maxLines = 1
                     )
+                    
+                    // WAKTU - ABU TERANG
                     Text(
                         text = record.timestamp.format(DateTimeFormatter.ofPattern("HH:mm")),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.White.copy(alpha = 0.7f) // 🔥 PUTIH TRANSPARAN
                     )
                 }
 
-                // Info Kelas & Grade
-                val classInfo = buildString {
-                    append(record.className ?: "-")
-                    if (subClassName != null) append(" ($subClassName)")
+                // KELAS & GRADE - PUTIH SOFT
+                val classDetail = buildString {
+                    append(record.className ?: "Umum")
+                    if (!subClassName.isNullOrEmpty()) append(" ($subClassName)")
                 }
-                val gradeInfo = buildString {
-                    append(record.gradeName ?: "-")
-                    if (subGradeName != null) append(" ($subGradeName)")
-                }
-
+                
                 Text(
-                    text = "Kelas: $classInfo | Grade: $gradeInfo",
-                    style = MaterialTheme.typography.bodySmall
+                    text = "Kelas: $classDetail",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.White.copy(alpha = 0.6f) // 🔥 PUTIH SOFT
                 )
 
-                if (programName != null || roleName != null) {
+                if (!programName.isNullOrEmpty()) {
                     Text(
-                        text = "${programName ?: ""} ${if (roleName != null) "- $roleName" else ""}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.primary
+                        text = programName,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AzuraPrimary, // Warna Biru Azura (Tetap mencolok)
+                        fontWeight = FontWeight.Bold
                     )
                 }
 
-                // Tampilkan Catatan jika ada (Misal: "Sakit demam")
                 if (!record.note.isNullOrBlank()) {
+                    Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "Note: ${record.note}",
+                        text = "📝 ${record.note}",
                         style = MaterialTheme.typography.bodySmall,
-                        color = Color.Gray
+                        color = Color.LightGray // 🔥 ABU TERANG
                     )
                 }
             }
 
-            // Indikator jika input manual (Bukan hasil Scan Wajah)
+            // --- 3. INDICATOR MANUAL ---
             if (record.faceId == null) {
+                Spacer(Modifier.width(8.dp))
                 Icon(
                     imageVector = Icons.Default.EditNote,
-                    contentDescription = "Manual Entry",
-                    tint = MaterialTheme.colorScheme.outline,
-                    modifier = Modifier.size(20.dp)
+                    contentDescription = "Manual",
+                    tint = Color.White.copy(alpha = 0.5f), // 🔥 ICON PUTIH SOFT
+                    modifier = Modifier.size(24.dp)
                 )
             }
         }
     }
-}
-
-/**
- * Helper untuk mendapatkan warna status di luar Composable jika dibutuhkan
- */
-fun getStatusColor(status: String): Color = when (status) {
-    "PRESENT" -> Color(0xFF4CAF50)
-    "SAKIT" -> Color(0xFFFFC107)
-    "IZIN" -> Color(0xFF2196F3)
-    "ALPHA" -> Color(0xFFF44336)
-    else -> Color.Gray
 }

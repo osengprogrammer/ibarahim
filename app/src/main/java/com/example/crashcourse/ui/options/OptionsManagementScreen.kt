@@ -9,13 +9,15 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.crashcourse.viewmodel.OptionsViewModel
 import com.example.crashcourse.db.*
 
-// Import helper functions secara eksplisit
+// Import helpers secara eksplisit
 import com.example.crashcourse.ui.OptionsHelpers.getName
 import com.example.crashcourse.ui.OptionsHelpers.getOrder
 import com.example.crashcourse.ui.OptionsHelpers.getParentId
@@ -29,17 +31,21 @@ import com.example.crashcourse.ui.OptionsHelpers.getId
 fun OptionsManagementScreen(
     viewModel: OptionsViewModel = viewModel()
 ) {
-    var selectedOptionType by remember { mutableStateOf("Class") }
-    var expanded by remember { mutableStateOf(false) }
-    val optionTypes = listOf("Class", "SubClass", "Grade", "SubGrade", "Program", "Role")
+    // 🚀 STATE SINKRONISASI
+    val isSyncing by viewModel.isSyncing.collectAsStateWithLifecycle()
 
-    // State untuk Dialog Tambah Data
+    // 1. Kategori Lengkap
+    val optionTypes = listOf("Class", "SubClass", "Grade", "SubGrade", "Program", "Role")
+    var selectedOptionType by remember { mutableStateOf(optionTypes[0]) }
+    var expanded by remember { mutableStateOf(false) }
+
+    // 2. State untuk Dialog Tambah Data
     var showAddDialog by remember { mutableStateOf(false) }
     var newName by remember { mutableStateOf("") }
     var newOrder by remember { mutableStateOf("0") }
     var newParentId by remember { mutableStateOf<Int?>(null) }
 
-    // Collect lists dari database Room
+    // 3. Koleksi Data dari Database (Reaktif)
     val classOptions by viewModel.classOptions.collectAsStateWithLifecycle(emptyList())
     val subClassOptions by viewModel.subClassOptions.collectAsStateWithLifecycle(emptyList())
     val gradeOptions by viewModel.gradeOptions.collectAsStateWithLifecycle(emptyList())
@@ -47,6 +53,7 @@ fun OptionsManagementScreen(
     val programOptions by viewModel.programOptions.collectAsStateWithLifecycle(emptyList())
     val roleOptions by viewModel.roleOptions.collectAsStateWithLifecycle(emptyList())
 
+    // 4. Mapping List berdasarkan pilihan Kategori
     val options = when (selectedOptionType) {
         "Class" -> classOptions
         "SubClass" -> subClassOptions
@@ -57,17 +64,21 @@ fun OptionsManagementScreen(
         else -> emptyList()
     }
     
+    // 5. Mapping Parent (Relasi)
     val parentOptions = when (selectedOptionType) {
         "SubClass" -> classOptions
         "SubGrade" -> gradeOptions
         else -> emptyList()
     }
 
-    // --- DIALOG TAMBAH DATA BARU ---
+    // --- DIALOG CRUD (CREATE) ---
     if (showAddDialog) {
         AlertDialog(
-            onDismissRequest = { showAddDialog = false },
-            title = { Text("Tambah $selectedOptionType Baru") },
+            onDismissRequest = { 
+                showAddDialog = false
+                newName = ""; newOrder = "0"; newParentId = null 
+            },
+            title = { Text("Tambah $selectedOptionType Baru", fontWeight = FontWeight.Bold) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
@@ -83,14 +94,14 @@ fun OptionsManagementScreen(
                         modifier = Modifier.fillMaxWidth()
                     )
 
-                    if (selectedOptionType == "SubClass" || selectedOptionType == "SubGrade") {
+                    if (parentOptions.isNotEmpty()) {
                         var parentExpanded by remember { mutableStateOf(false) }
                         Box(modifier = Modifier.fillMaxWidth()) {
                             OutlinedTextField(
                                 value = parentOptions.find { getId(it) == newParentId }?.let { getName(it) } ?: "Pilih Parent",
                                 onValueChange = {},
                                 readOnly = true,
-                                label = { Text("Pilih Parent") },
+                                label = { Text("Relasi Induk") },
                                 trailingIcon = {
                                     IconButton(onClick = { parentExpanded = !parentExpanded }) {
                                         Icon(Icons.Default.ArrowDropDown, null)
@@ -124,59 +135,121 @@ fun OptionsManagementScreen(
                             newName = ""; newOrder = "0"; newParentId = null
                             showAddDialog = false
                         }
-                    }
+                    },
+                    enabled = newName.isNotBlank()
                 ) { Text("Simpan") }
             },
             dismissButton = {
-                TextButton(onClick = { showAddDialog = false }) { Text("Batal") }
+                TextButton(onClick = { 
+                    showAddDialog = false
+                    newName = ""; newOrder = "0"; newParentId = null 
+                }) { Text("Batal") }
             }
         )
     }
 
+    // --- MAIN UI ---
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-        Text(text = "Kelola Data Master", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.padding(bottom = 16.dp))
-
-        Box(modifier = Modifier.fillMaxWidth()) {
-            OutlinedTextField(
-                value = selectedOptionType,
-                onValueChange = {},
-                readOnly = true,
-                label = { Text("Pilih Tipe Data") },
-                trailingIcon = { IconButton(onClick = { expanded = !expanded }) { Icon(Icons.Filled.ArrowDropDown, null) } },
-                modifier = Modifier.fillMaxWidth()
-            )
-            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, modifier = Modifier.fillMaxWidth()) {
-                optionTypes.forEach { type ->
-                    DropdownMenuItem(text = { Text(type) }, onClick = { selectedOptionType = type; expanded = false })
+        
+        // 🚀 HEADER DENGAN TOMBOL SYNC PULL
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text(
+                    text = "Data Master", 
+                    style = MaterialTheme.typography.headlineMedium, 
+                    fontWeight = FontWeight.ExtraBold
+                )
+                Text(
+                    text = "Sinkronisasi Master Data AzuraTech",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color.Gray
+                )
+            }
+            
+            // TOMBOL SYNC PULL
+            IconButton(
+                onClick = { viewModel.syncAllFromCloud() },
+                enabled = !isSyncing
+            ) {
+                if (isSyncing) {
+                    CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                } else {
+                    Icon(
+                        Icons.Default.CloudDownload, 
+                        contentDescription = "Sync", 
+                        tint = MaterialTheme.colorScheme.primary
+                    )
                 }
             }
         }
 
         Spacer(modifier = Modifier.height(16.dp))
 
+        // Dropdown Kategori (READ)
+        Box(modifier = Modifier.fillMaxWidth()) {
+            OutlinedTextField(
+                value = selectedOptionType,
+                onValueChange = {},
+                readOnly = true,
+                label = { Text("Pilih Kategori") },
+                leadingIcon = { Icon(Icons.Default.Category, null) },
+                trailingIcon = { IconButton(onClick = { expanded = !expanded }) { Icon(Icons.Filled.ArrowDropDown, null) } },
+                modifier = Modifier.fillMaxWidth()
+            )
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }, modifier = Modifier.fillMaxWidth()) {
+                optionTypes.forEach { type ->
+                    DropdownMenuItem(
+                        text = { Text(type) }, 
+                        onClick = { 
+                            selectedOptionType = type
+                            expanded = false 
+                        }
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // LIST DATA (READ / UPDATE / DELETE)
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.weight(1f)) {
             items(options, key = { getId(it) }) { option ->
-                // ✅ FITUR YANG TADI HILANG SUDAH DITAMBAHKAN DI BAWAH
                 ExpandableOptionCard(
                     option = option,
                     parentOptions = parentOptions,
                     onSave = { updated ->
-                        viewModel.updateOption(selectedOptionType, updated, getName(updated), getOrder(updated), getParentId(updated))
+                        viewModel.updateOption(
+                            selectedOptionType, 
+                            updated, 
+                            getName(updated), 
+                            getOrder(updated), 
+                            getParentId(updated)
+                        )
                     },
-                    onDelete = { viewModel.deleteOption(selectedOptionType, it) }
+                    onDelete = { toDelete ->
+                        viewModel.deleteOption(selectedOptionType, toDelete)
+                    }
                 )
             }
         }
         
-        Button(onClick = { showAddDialog = true }, modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+        // Floating Action Button (CREATE Trigger)
+        Button(
+            onClick = { showAddDialog = true }, 
+            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+            shape = MaterialTheme.shapes.medium
+        ) {
             Icon(Icons.Default.Add, null)
             Spacer(Modifier.width(8.dp))
-            Text("Tambah $selectedOptionType Baru")
+            Text("Tambah $selectedOptionType")
         }
     }
 }
 
-// ✅ BERIKUT ADALAH FUNGSI YANG TADI UNRESOLVED (DITAMBAHKAN KEMBALI)
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ExpandableOptionCard(
@@ -188,9 +261,13 @@ fun ExpandableOptionCard(
     var isExpanded by remember { mutableStateOf(false) }
     var dropdownExpanded by remember { mutableStateOf(false) }
 
-    var name by remember(option) { mutableStateOf(getName(option)) }
-    var order by remember(option) { mutableStateOf(getOrder(option).toString()) }
-    var parentId by remember(option) { mutableStateOf(getParentId(option) ?: 1) }
+    var nameInput by remember(option) { mutableStateOf(getName(option)) }
+    var orderInput by remember(option) { mutableStateOf(getOrder(option).toString()) }
+    var parentIdInput by remember(option) { mutableStateOf(getParentId(option)) }
+
+    val isChanged = nameInput != getName(option) || 
+                    orderInput != getOrder(option).toString() || 
+                    parentIdInput != getParentId(option)
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -206,7 +283,7 @@ fun ExpandableOptionCard(
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column {
-                    Text(getName(option), style = MaterialTheme.typography.titleMedium)
+                    Text(getName(option), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     Text("Urutan: ${getOrder(option)}", style = MaterialTheme.typography.bodySmall)
                 }
                 Icon(imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore, contentDescription = null)
@@ -215,25 +292,24 @@ fun ExpandableOptionCard(
             if (isExpanded) {
                 Spacer(modifier = Modifier.height(12.dp))
                 OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it; onSave(setName(option, it)) },
+                    value = nameInput,
+                    onValueChange = { nameInput = it },
                     label = { Text("Nama") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
+                    modifier = Modifier.fillMaxWidth()
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 OutlinedTextField(
-                    value = order,
-                    onValueChange = { order = it; onSave(setOrder(option, it.toIntOrNull() ?: 0)) },
-                    label = { Text("Urutan (Order)") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
+                    value = orderInput,
+                    onValueChange = { orderInput = it },
+                    label = { Text("Urutan") },
+                    modifier = Modifier.fillMaxWidth()
                 )
+                
                 if (parentOptions.isNotEmpty()) {
                     Spacer(modifier = Modifier.height(8.dp))
                     Box(modifier = Modifier.fillMaxWidth()) {
                         OutlinedTextField(
-                            value = parentOptions.find { getId(it) == parentId }?.let { getName(it) } ?: "Pilih Parent",
+                            value = parentOptions.find { getId(it) == parentIdInput }?.let { getName(it) } ?: "Pilih Parent",
                             onValueChange = {},
                             readOnly = true,
                             label = { Text("Induk (Parent)") },
@@ -245,8 +321,7 @@ fun ExpandableOptionCard(
                                 DropdownMenuItem(
                                     text = { Text(getName(parent)) },
                                     onClick = {
-                                        parentId = getId(parent)
-                                        onSave(setParentId(option, parentId))
+                                        parentIdInput = getId(parent)
                                         dropdownExpanded = false
                                     }
                                 )
@@ -254,10 +329,34 @@ fun ExpandableOptionCard(
                         }
                     }
                 }
+
                 Spacer(modifier = Modifier.height(16.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    TextButton(onClick = { onDelete(option) }, colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) {
-                        Icon(Icons.Default.Delete, null); Spacer(Modifier.width(4.dp)); Text("Hapus")
+                    TextButton(
+                        onClick = { onDelete(option) }, 
+                        colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                    ) {
+                        Icon(Icons.Default.Delete, null)
+                        Spacer(Modifier.width(4.dp))
+                        Text("Hapus")
+                    }
+                    
+                    Spacer(modifier = Modifier.width(8.dp))
+                    
+                    Button(
+                        onClick = {
+                            var updated = option
+                            updated = setName(updated, nameInput)
+                            updated = setOrder(updated, orderInput.toIntOrNull() ?: 0)
+                            updated = setParentId(updated, parentIdInput)
+                            onSave(updated)
+                            isExpanded = false
+                        },
+                        enabled = isChanged && nameInput.isNotBlank()
+                    ) {
+                        Icon(Icons.Default.Save, null)
+                        Spacer(Modifier.width(4.dp))
+                        Text("Simpan")
                     }
                 }
             }

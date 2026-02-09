@@ -6,6 +6,7 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.crashcourse.db.*
+import com.example.crashcourse.utils.Constants // 🚀 Import Constants
 import com.example.crashcourse.utils.FirestoreHelper
 import com.example.crashcourse.utils.PhotoStorageUtils
 import kotlinx.coroutines.Dispatchers
@@ -19,7 +20,7 @@ class FaceViewModel(application: Application) : AndroidViewModel(application) {
     private val faceDao = database.faceDao()
     private val checkInRecordDao = database.checkInRecordDao()
     
-    // DAOs for Options
+    // DAOs for Options (Master Data)
     private val classOptionDao = database.classOptionDao()
     private val subClassOptionDao = database.subClassOptionDao()
     private val gradeOptionDao = database.gradeOptionDao()
@@ -28,21 +29,24 @@ class FaceViewModel(application: Application) : AndroidViewModel(application) {
     private val roleOptionDao = database.roleOptionDao()
 
     companion object {
-        private const val DUPLICATE_DISTANCE_THRESHOLD = 0.3f
-        
-        // 🚀 CRITICAL FIX: Changed from 0.40f to 0.80f for MobileFaceNet
-        // If this is too low, the app will reject valid faces and get "stuck".
-        const val RECOGNITION_DISTANCE_THRESHOLD = 0.75f 
-        
         private const val TAG = "FaceViewModel"
-        
-        // ⏱️ COOLDOWN: Prevent spamming check-ins for the same person
-        private const val CHECK_IN_COOLDOWN_MS = 3000L // 3 Seconds
+        const val RECOGNITION_DISTANCE_THRESHOLD = 0.75f 
+        private const val CHECK_IN_COOLDOWN_MS = 5000L 
     }
 
     // --- 🛡️ STATE MANAGEMENT ---
-    private var lastCheckInTime: Long = 0
-    private var lastCheckInId: String? = null
+    @Volatile private var lastCheckInTime: Long = 0
+    @Volatile private var lastCheckInId: String? = null
+
+    // StateFlows
+    // 🚀 Update: ditambahkan distinctUntilChanged() untuk efisiensi UI
+    val faceList: StateFlow<List<FaceEntity>> = faceDao.getAllFacesFlow()
+        .distinctUntilChanged() 
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    val allCheckInRecords: StateFlow<List<CheckInRecord>> = checkInRecordDao.getAllRecords()
+        .distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     // --- 🛡️ TEACHER SCOPE LOGIC ---
     private var cachedScopedFlow: StateFlow<List<FaceEntity>>? = null
@@ -53,55 +57,49 @@ class FaceViewModel(application: Application) : AndroidViewModel(application) {
             return cachedScopedFlow!!
         }
         lastUserId = authState.uid
+        
         val flow = faceDao.getAllFacesFlow()
+            .distinctUntilChanged() // 🚀 Menghindari emisi data yang duplikat
             .map { allFaces ->
-                if (authState.role == "ADMIN") allFaces 
+                if (authState.role == Constants.ROLE_ADMIN) allFaces 
                 else allFaces.filter { face -> authState.assignedClasses.contains(face.className) }
             }
             .flowOn(Dispatchers.Default)
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+        
         cachedScopedFlow = flow
         return flow
     }
 
-    val faceList: StateFlow<List<FaceEntity>> =
-        faceDao.getAllFacesFlow()
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-
-    // --- 📝 ATTENDANCE LOGIC (WITH ANTI-SPAM) ---
+    // --- 📝 ATTENDANCE LOGIC ---
 
     fun saveCheckIn(name: String) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                // 1. Cari data lengkap siswa
                 val face = faceDao.getFaceByName(name) ?: run {
-                    Log.e(TAG, "❌ Gagal: Wajah '$name' tidak ada di DB Lokal")
+                    Log.e(TAG, "❌ Gagal: Wajah '$name' tidak ditemukan")
                     return@launch
                 }
 
-                // 🚀 ANTI-SPAM CHECK
-                // Kalau orang yang sama check-in lagi dalam waktu kurang dari 3 detik, ABAIKAN.
                 val currentTime = System.currentTimeMillis()
                 if (face.studentId == lastCheckInId && (currentTime - lastCheckInTime < CHECK_IN_COOLDOWN_MS)) {
-                    Log.d(TAG, "⏳ Check-in ignored (Cooldown active) for: ${face.name}")
                     return@launch
                 }
 
-                // Update State
+                val lastRecordTimestamp = checkInRecordDao.getLastTimestampByStudentId(face.studentId)
+                if (lastRecordTimestamp != null && lastRecordTimestamp.isAfter(LocalDateTime.now().minusMinutes(1))) {
+                    return@launch
+                }
+
                 lastCheckInId = face.studentId
                 lastCheckInTime = currentTime
-
-                // 2. Validasi ID
-                if (face.studentId.isBlank()) {
-                    Log.e(TAG, "❌ FATAL: ID Kosong. Sync Cloud dibatalkan.")
-                }
 
                 val record = CheckInRecord(
                     studentId = face.studentId,
                     name = face.name,
                     timestamp = LocalDateTime.now(),
-                    faceId = face.id,
-                    status = "PRESENT",
+                    faceId = 0, // Menggunakan 0 karena id Int sudah dihapus dari FaceEntity
+                    status = Constants.STATUS_PRESENT,
                     classId = face.classId,
                     className = face.className,
                     subClassId = face.subClassId,
@@ -112,18 +110,10 @@ class FaceViewModel(application: Application) : AndroidViewModel(application) {
                     roleId = face.roleId
                 )
 
-                // 3. Simpan Local
                 checkInRecordDao.insert(record)
-                Log.d(TAG, "💾 Tersimpan Local: ${record.name}")
                 
-                // 4. Sync Cloud
                 if (face.studentId.isNotBlank()) {
-                    try {
-                        FirestoreHelper.syncAttendanceLog(record)
-                        Log.d(TAG, "☁️ Berhasil Sync Cloud: ${face.name}")
-                    } catch (e: Exception) {
-                        Log.e(TAG, "⚠️ Gagal Sync Cloud: ${e.message}")
-                    }
+                    FirestoreHelper.syncAttendanceLog(record)
                 }
 
             } catch (e: Exception) {
@@ -143,10 +133,7 @@ class FaceViewModel(application: Application) : AndroidViewModel(application) {
     ) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                if (studentId.trim().isEmpty()) {
-                    Log.e(TAG, "❌ Registrasi Dibatalkan: studentId Kosong!")
-                    return@launch
-                }
+                if (studentId.trim().isEmpty()) return@launch
 
                 val existingFace = faceDao.getFaceByStudentId(studentId)
                 if (existingFace != null) {
@@ -163,25 +150,21 @@ class FaceViewModel(application: Application) : AndroidViewModel(application) {
                 )
 
                 faceDao.insert(face)
-                Log.d(TAG, "💾 Tersimpan di Local Room")
-
                 val isCloudSynced = FirestoreHelper.syncStudentToFirestore(face)
                 
-                if (isCloudSynced) {
-                    Log.d(TAG, "☁️ Berhasil Sinkron ke Firestore")
-                    FaceCache.refresh(getApplication())
-                    withContext(Dispatchers.Main) { onSuccess() }
-                } else {
-                    Log.e(TAG, "⚠️ Gagal Sinkron Cloud.")
-                    withContext(Dispatchers.Main) { onSuccess() }
-                }
+                FaceCache.refresh(getApplication())
+                
+                withContext(Dispatchers.Main) { onSuccess() }
+                
+                if (isCloudSynced) Log.d(TAG, "✅ Synced to Cloud: $name")
+                
             } catch (e: Exception) {
                 Log.e(TAG, "🔥 Registrasi Error: ${e.message}")
             }
         }
     }
 
-    // --- 🛠️ DROPDOWN OPTIONS ---
+    // --- 🛠️ MASTER DATA OPTIONS ---
     
     val classOptions: StateFlow<List<ClassOption>> = classOptionDao.getAllOptions()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -200,19 +183,73 @@ class FaceViewModel(application: Application) : AndroidViewModel(application) {
 
     // --- ⚙️ MANAGEMENT FUNCTIONS ---
 
+    /**
+     * 🔄 SMART SYNC ORCHESTRATOR
+     */
+    fun syncStudentsWithCloud(authState: AuthState.Active) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                Log.d(TAG, "🚀 Memulai Sinkronisasi Pintar...")
+
+                val cloudFaces = FirestoreHelper.getScopedStudentsFromFirestore(authState.uid)
+                
+                if (cloudFaces.isEmpty()) {
+                    Log.d(TAG, "☁️ Cloud kosong atau gagal koneksi.")
+                    return@launch
+                }
+
+                faceDao.insertAll(cloudFaces)
+                Log.d(TAG, "📥 Berhasil Upsert ${cloudFaces.size} siswa ke Lokal.")
+
+                val cloudIds = cloudFaces.map { it.studentId }
+                faceDao.deleteOrphanedRecords(cloudIds)
+                Log.d(TAG, "🧹 Pembersihan data hantu selesai.")
+
+                FaceCache.refresh(getApplication())
+                
+                Log.d(TAG, "✅ Sinkronisasi Selesai!")
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Error saat sinkronisasi: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * 🚀 DELETE FACE
+     */
     fun deleteFace(face: FaceEntity) {
         viewModelScope.launch(Dispatchers.IO) {
-            faceDao.delete(face)
-            FaceCache.refresh(getApplication())
+            try {
+                FirestoreHelper.deleteStudentFromFirestore(face.studentId)
+                faceDao.delete(face)
+
+                face.photoUrl?.let { path ->
+                    val file = java.io.File(path)
+                    if (file.exists()) {
+                        val deleted = file.delete()
+                        if (deleted) Log.d(TAG, "📁 File foto berhasil dihapus dari storage")
+                    }
+                }
+                
+                FaceCache.refresh(getApplication())
+                
+                Log.d(TAG, "🗑️ Berhasil menghapus wajah: ${face.name}")
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Gagal menghapus wajah", e)
+            }
         }
     }
 
     fun updateFace(face: FaceEntity, onComplete: () -> Unit) {
         viewModelScope.launch(Dispatchers.IO) {
-            faceDao.update(face)
-            FirestoreHelper.syncStudentToFirestore(face) 
-            FaceCache.refresh(getApplication())
-            withContext(Dispatchers.Main) { onComplete() }
+            try {
+                faceDao.update(face)
+                FirestoreHelper.updateStudentInFirestore(face)
+                FaceCache.refresh(getApplication())
+                withContext(Dispatchers.Main) { onComplete() }
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Gagal update profil: ${e.message}")
+            }
         }
     }
 
@@ -228,16 +265,20 @@ class FaceViewModel(application: Application) : AndroidViewModel(application) {
                 } else {
                     face.photoUrl
                 }
+                
                 if (photoUrl != null && photoUrl != face.photoUrl) {
                     PhotoStorageUtils.cleanupOldPhotos(getApplication(), face.studentId, photoUrl)
                 }
+                
                 val updatedFace = face.copy(photoUrl = photoUrl, embedding = embeddingCopy)
+                
                 faceDao.update(updatedFace)
                 FirestoreHelper.syncStudentToFirestore(updatedFace)
                 FaceCache.refresh(getApplication())
+                
                 withContext(Dispatchers.Main) { onComplete() }
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { onError("Gagal update: ${e.message}") }
+                withContext(Dispatchers.Main) { onError("Gagal update foto: ${e.message}") }
             }
         }
     }

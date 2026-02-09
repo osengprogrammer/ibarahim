@@ -1,13 +1,17 @@
 package com.example.crashcourse.ui.add
 
 import android.graphics.Bitmap
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Fingerprint
+import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -15,19 +19,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.crashcourse.viewmodel.FaceViewModel
 import com.example.crashcourse.utils.PhotoStorageUtils
+import com.example.crashcourse.ui.components.* import com.example.crashcourse.ui.theme.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/**
- * PHASE-1 STABILIZED ADD USER SCREEN
- * Ensures facts (embeddings/bitmaps) are stored correctly in the DB.
- */
 @Composable
 fun AddUserScreen(
     onNavigateBack: () -> Unit = {},
@@ -38,124 +42,158 @@ fun AddUserScreen(
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
 
-    // UI State
+    // Form States
     var name by remember { mutableStateOf("") }
     var studentId by remember { mutableStateOf("") }
     var embedding by remember { mutableStateOf<FloatArray?>(null) }
     var capturedBitmap by remember { mutableStateOf<Bitmap?>(null) }
     
-    // Process State
     var isSubmitting by remember { mutableStateOf(false) }
-    var isSaved by remember { mutableStateOf(false) }
+    var showSuccessDialog by remember { mutableStateOf(false) } // 🚀 New: Success Dialog
     
-    // Overlay State
+    // Overlay States
     var showFaceCapture by remember { mutableStateOf(false) }
     var captureMode by remember { mutableStateOf(CaptureMode.EMBEDDING) }
 
+    // Fungsi untuk Reset Form setelah Sukses
+    fun resetForm() {
+        name = ""
+        studentId = ""
+        embedding = null
+        capturedBitmap = null
+        isSubmitting = false
+    }
+
     Scaffold(
-        snackbarHost = { SnackbarHost(hostState = snackbarHostState) }
+        snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
+        containerColor = AzuraBg
     ) { paddingValues ->
-        Box(modifier = Modifier.fillMaxSize()) {
+        Box(modifier = Modifier.fillMaxSize().padding(paddingValues)) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(16.dp)
-                    .padding(paddingValues),
+                    .padding(24.dp),
                 verticalArrangement = Arrangement.Top
             ) {
-                // Header
+                // --- HEADER ---
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Add New User", style = MaterialTheme.typography.headlineSmall)
+                    AzuraTitle("Tambah Siswa")
                     IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.Default.Close, "Close")
+                        Icon(Icons.Default.Close, "Close", tint = AzuraText)
                     }
                 }
                 
-                Spacer(Modifier.height(24.dp))
+                Spacer(Modifier.height(16.dp))
 
-                // Input Fields
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it; isSaved = false },
-                    label = { Text("Full Name") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
-                )
+                // --- INPUT SECTION ---
+                Text("Informasi Dasar", style = MaterialTheme.typography.labelMedium, color = AzuraText.copy(alpha = 0.6f))
                 Spacer(Modifier.height(8.dp))
-                OutlinedTextField(
+                
+                AzuraInput(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = "Nama Lengkap Siswa"
+                )
+                Spacer(Modifier.height(12.dp))
+                AzuraInput(
                     value = studentId,
-                    onValueChange = { studentId = it; isSaved = false },
-                    label = { Text("Student ID") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
+                    onValueChange = { studentId = it },
+                    label = "Nomor Induk (NIK/NISN)"
                 )
                 
                 Spacer(Modifier.height(24.dp))
 
-                // Action Card
+                // --- BIOMETRIC CARD ---
+                Text(
+                    "Data Biometrik", 
+                    style = MaterialTheme.typography.titleMedium,
+                    color = AzuraText, // 🚀 Pastikan Hitam Tajam
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+                
                 Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.medium),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color.White),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
                 ) {
                     Column(
                         modifier = Modifier.padding(20.dp),
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Text("Biometric Data", style = MaterialTheme.typography.titleMedium)
-                        
-                        // Embedding Capture
+                        // Scan Embedding Button
                         Button(
                             onClick = { 
                                 captureMode = CaptureMode.EMBEDDING
                                 showFaceCapture = true 
                             },
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier.fillMaxWidth().height(52.dp),
+                            shape = RoundedCornerShape(14.dp),
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = if (embedding == null) MaterialTheme.colorScheme.primary 
-                                                else Color(0xFF008080)
+                                containerColor = if (embedding == null) Color(0xFFF0F0F0) else AzuraSuccess,
+                                contentColor = if (embedding == null) AzuraText else Color.White
                             )
                         ) {
-                            Text(if (embedding == null) "Scan Face (Embedding)" else "Face Scanned ✅")
+                            Icon(Icons.Default.Fingerprint, null)
+                            Spacer(Modifier.width(12.dp))
+                            Text(
+                                if (embedding == null) "Scan Biometrik Wajah" else "Wajah Terverifikasi ✅",
+                                fontWeight = FontWeight.SemiBold
+                            )
                         }
 
-                        // Photo Capture
+                        // Take Photo Button
                         Button(
                             onClick = { 
                                 captureMode = CaptureMode.PHOTO
                                 showFaceCapture = true 
                             },
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier.fillMaxWidth().height(52.dp),
+                            shape = RoundedCornerShape(14.dp),
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = if (capturedBitmap == null) MaterialTheme.colorScheme.primary 
-                                                else Color(0xFF008080)
+                                containerColor = if (capturedBitmap == null) Color(0xFFF0F0F0) else AzuraSecondary,
+                                contentColor = if (capturedBitmap == null) AzuraText else Color.White
                             )
                         ) {
-                            Text(if (capturedBitmap == null) "Take Profile Photo" else "Photo Taken ✅")
+                            Icon(Icons.Default.PhotoCamera, null)
+                            Spacer(Modifier.width(12.dp))
+                            Text(
+                                if (capturedBitmap == null) "Ambil Foto Profil" else "Foto Profil Tersimpan ✅",
+                                fontWeight = FontWeight.SemiBold
+                            )
                         }
 
+                        // Preview Circle
                         if (capturedBitmap != null) {
-                            Image(
-                                bitmap = capturedBitmap!!.asImageBitmap(),
-                                contentDescription = "Preview",
-                                modifier = Modifier
-                                    .size(100.dp)
-                                    .clip(MaterialTheme.shapes.small)
-                                    .align(Alignment.CenterHorizontally)
-                            )
+                            Spacer(Modifier.height(8.dp))
+                            Surface(
+                                modifier = Modifier.size(110.dp),
+                                shape = CircleShape,
+                                border = BorderStroke(3.dp, AzuraAccent),
+                                shadowElevation = 8.dp
+                            ) {
+                                Image(
+                                    bitmap = capturedBitmap!!.asImageBitmap(),
+                                    contentDescription = "Preview",
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
                         }
                     }
                 }
 
-                Spacer(Modifier.height(32.dp))
+                Spacer(modifier = Modifier.weight(1f))
 
-                // Registration Action
-                Button(
+                // --- SUBMIT ACTION ---
+                AzuraButton(
+                    text = "Simpan Data Siswa",
                     onClick = {
                         val finalName = name.trim()
                         val finalId = studentId.trim()
@@ -165,62 +203,64 @@ fun AddUserScreen(
                             
                             scope.launch(Dispatchers.IO) {
                                 try {
-                                    // 1. Save File to Storage
                                     val photoUrl = PhotoStorageUtils.saveFacePhoto(context, capturedBitmap!!, finalId)
                                     
                                     if (photoUrl != null) {
-                                        // 2. Register to Database
                                         viewModel.registerFace(
                                             studentId = finalId,
                                             name = finalName,
-                                            embedding = embedding!!, // Law L1: already a cloned value
+                                            embedding = embedding!!,
                                             photoUrl = photoUrl,
                                             onSuccess = {
                                                 scope.launch(Dispatchers.Main) {
-                                                    isSaved = true
-                                                    isSubmitting = false
-                                                    embedding = null
-                                                    capturedBitmap = null
-                                                    name = ""
-                                                    studentId = ""
-                                                    onUserAdded()
+                                                    showSuccessDialog = true // 🚀 Show confirmation dialog
                                                 }
                                             },
                                             onDuplicate = { existing ->
                                                 scope.launch(Dispatchers.Main) {
                                                     isSubmitting = false
-                                                    snackbarHostState.showSnackbar("ID already exists: $existing")
+                                                    snackbarHostState.showSnackbar("ID $existing sudah terdaftar!")
                                                 }
                                             }
                                         )
-                                    } else {
-                                        withContext(Dispatchers.Main) {
-                                            isSubmitting = false
-                                            snackbarHostState.showSnackbar("Storage error: Could not save photo")
-                                        }
                                     }
                                 } catch (e: Exception) {
                                     withContext(Dispatchers.Main) {
                                         isSubmitting = false
-                                        snackbarHostState.showSnackbar("Registration failed: ${e.message}")
+                                        snackbarHostState.showSnackbar("Gagal: ${e.message}")
                                     }
                                 }
                             }
                         }
                     },
-                    enabled = !isSubmitting && embedding != null && capturedBitmap != null && name.isNotBlank(),
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = MaterialTheme.shapes.large
-                ) {
-                    if (isSubmitting) {
-                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                    } else {
-                        Text("Finish Registration")
-                    }
-                }
+                    isLoading = isSubmitting,
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
             }
 
-            // Phase-1 Safe Capture Overlay
+            // --- SUCCESS DIALOG ---
+            if (showSuccessDialog) {
+                AlertDialog(
+                    onDismissRequest = { },
+                    icon = { Icon(Icons.Default.CheckCircle, null, tint = AzuraSuccess, modifier = Modifier.size(64.dp)) },
+                    title = { Text("Registrasi Berhasil", color = AzuraText, fontWeight = FontWeight.Bold) },
+                    text = { Text("Data siswa atas nama $name telah berhasil disimpan ke database Azura AI.", textAlign = androidx.compose.ui.text.style.TextAlign.Center) },
+                    confirmButton = {
+                        AzuraButton(
+                            text = "Selesai",
+                            onClick = {
+                                showSuccessDialog = false
+                                resetForm() // 🚀 BERSIHKAN SEMUA DATA (TERMASUK FOTO)
+                                onUserAdded()
+                            }
+                        )
+                    },
+                    shape = RoundedCornerShape(28.dp),
+                    containerColor = Color.White
+                )
+            }
+
+            // Capture Overlay
             if (showFaceCapture) {
                 FaceCaptureScreen(
                     mode = captureMode,
@@ -232,5 +272,3 @@ fun AddUserScreen(
         }
     }
 }
-
-enum class CaptureMode { EMBEDDING, PHOTO }

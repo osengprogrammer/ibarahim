@@ -1,11 +1,13 @@
-package com.example.crashcourse.ui
+package com.example.crashcourse.ui.menu
 
-import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
-// ✅ TAMBAHKAN IMPORT INI:
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.AddPhotoAlternate // 🚀 FIX: Import Icon Gallery
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material3.*
@@ -16,75 +18,124 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.example.crashcourse.ui.components.AzuraTitle
+import com.example.crashcourse.ui.theme.*
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RegistrationMenuScreen(
+    onNavigateBack: () -> Unit,
     onNavigateToAddUser: () -> Unit,
-    onNavigateToBulkRegister: () -> Unit
+    onNavigateToBulkRegister: () -> Unit,
+    onNavigateToSingleUpload: () -> Unit // 🚀 FIX: Parameter baru untuk Single Upload
 ) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-            .padding(24.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        // Header
-        Text(
-            text = "Metode Registrasi",
-            style = MaterialTheme.typography.headlineMedium.copy(
-                fontWeight = FontWeight.Bold
-            ),
-            color = MaterialTheme.colorScheme.onBackground,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.padding(bottom = 8.dp)
-        )
-        
-        Text(
-            text = "Silakan pilih cara pendaftaran murid baru",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
-            modifier = Modifier.padding(bottom = 32.dp)
-        )
+    Scaffold(
+        containerColor = AzuraBg,
+        topBar = {
+            CenterAlignedTopAppBar(
+                title = { 
+                    Text(
+                        "Registrasi Siswa", 
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = AzuraText
+                    ) 
+                },
+                navigationIcon = {
+                    IconButton(onClick = onNavigateBack) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Kembali",
+                            tint = AzuraText
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
+                    containerColor = Color.White
+                )
+            )
+        }
+    ) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(horizontal = 24.dp),
+            verticalArrangement = Arrangement.Top,
+            horizontalAlignment = Alignment.Start
+        ) {
+            Spacer(modifier = Modifier.height(32.dp))
+            
+            AzuraTitle("Metode Pendaftaran")
+            
+            Text(
+                text = "Pilih salah satu metode pendaftaran murid di bawah ini untuk memulai sinkronisasi database Azura AI.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = AzuraText.copy(alpha = 0.6f),
+                modifier = Modifier.padding(bottom = 32.dp)
+            )
 
-        // 1. Add New User Card (Individual)
-        RegistrationCard(
-            title = "Pendaftaran Mandiri",
-            description = "Daftarkan satu murid menggunakan kamera dan input detail manual.",
-            icon = Icons.Default.PersonAdd,
-            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f),
-            onClick = onNavigateToAddUser
-        )
+            // 1. Pendaftaran Mandiri (Kamera Live)
+            AzuraRegistrationCard(
+                title = "Pendaftaran Mandiri",
+                description = "Gunakan kamera untuk memindai wajah murid secara langsung di lokasi.",
+                icon = Icons.Default.PersonAdd,
+                onClick = onNavigateToAddUser
+            )
 
-        Spacer(modifier = Modifier.height(20.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
-        // 2. Excel Image Process Card (Bulk)
-        RegistrationCard(
-            title = "Proses Excel & Image",
-            description = "Daftarkan murid dalam jumlah banyak melalui upload file Excel dan foto.",
-            icon = Icons.Default.FileUpload,
-            containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.4f),
-            onClick = onNavigateToBulkRegister
-        )
+            // 2. Upload Foto Tunggal (Galeri)
+            AzuraRegistrationCard(
+                title = "Upload Foto Galeri",
+                description = "Daftarkan satu murid menggunakan file foto yang sudah ada di galeri ponsel.",
+                icon = Icons.Default.AddPhotoAlternate,
+                onClick = onNavigateToSingleUpload
+            )
 
-        // Footer info
-        Text(
-            text = "AzuraTech Registration System",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f),
-            modifier = Modifier.padding(top = 48.dp)
-        )
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // 3. Bulk Import (CSV/Excel)
+            AzuraRegistrationCard(
+                title = "Bulk Import (CSV)",
+                description = "Daftarkan banyak murid sekaligus menggunakan file CSV dan kumpulan foto.",
+                icon = Icons.Default.FileUpload,
+                onClick = onNavigateToBulkRegister
+            )
+
+            Spacer(modifier = Modifier.weight(1f))
+
+            // Branding Footer
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 24.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Surface(
+                    color = AzuraPrimary.copy(alpha = 0.05f),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text(
+                        text = "AZURA AI SECURE v1.0",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = AzuraPrimary.copy(alpha = 0.5f),
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun RegistrationCard(
+fun AzuraRegistrationCard(
     title: String,
     description: String,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
-    containerColor: Color,
     onClick: () -> Unit
 ) {
     Card(
@@ -92,45 +143,59 @@ fun RegistrationCard(
         modifier = Modifier
             .fillMaxWidth()
             .height(130.dp),
-        colors = CardDefaults.cardColors(containerColor = containerColor),
-        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
-        shape = RoundedCornerShape(20.dp)
+        colors = CardDefaults.cardColors(containerColor = Color.White),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        shape = RoundedCornerShape(24.dp),
+        border = BorderStroke(1.dp, Color.LightGray.copy(alpha = 0.3f))
     ) {
         Row(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(20.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(16.dp)
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            // ✅ CircleShape digunakan di sini untuk latar belakang ikon
+            // Icon Container
             Surface(
                 shape = CircleShape,
-                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.6f),
-                modifier = Modifier.size(56.dp)
+                color = AzuraPrimary.copy(alpha = 0.1f),
+                modifier = Modifier.size(60.dp)
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
                         imageVector = icon,
                         contentDescription = null,
-                        modifier = Modifier.size(32.dp),
-                        tint = MaterialTheme.colorScheme.primary
+                        modifier = Modifier.size(30.dp),
+                        tint = AzuraPrimary
                     )
                 }
             }
 
+            Spacer(modifier = Modifier.width(20.dp))
+
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = title,
-                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold),
-                    color = Color(0xFF006064) // Dark Teal
+                    style = MaterialTheme.typography.titleMedium.copy(
+                        fontWeight = FontWeight.ExtraBold,
+                        color = AzuraText,
+                        fontSize = 17.sp
+                    )
                 )
+                Spacer(modifier = Modifier.height(4.dp))
                 Text(
                     text = description,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Color(0xFF006064).copy(alpha = 0.7f)
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AzuraText.copy(alpha = 0.5f),
+                    lineHeight = 16.sp
                 )
             }
+
+            Icon(
+                imageVector = Icons.Default.ChevronRight,
+                contentDescription = null,
+                tint = Color.LightGray,
+                modifier = Modifier.size(24.dp)
+            )
         }
     }
 }

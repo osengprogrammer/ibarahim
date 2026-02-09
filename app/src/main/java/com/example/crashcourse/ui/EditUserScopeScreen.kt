@@ -1,13 +1,13 @@
 package com.example.crashcourse.ui
 
-import android.util.Log // ✅ FIX: Added missing Log import
+import android.util.Log
 import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Search
@@ -19,6 +19,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.crashcourse.utils.Constants // 🚀 Gunakan Constants
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
@@ -33,113 +34,93 @@ fun EditUserScopeScreen(
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
+    // State Data
     var email by remember { mutableStateOf("Loading...") }
-    var selectedRole by remember { mutableStateOf("USER") }
+    var selectedRole by remember { mutableStateOf("USER") } // Default
     
+    // State List Kelas
     val allClassNames = remember { mutableStateListOf<String>() }
     val selectedClasses = remember { mutableStateListOf<String>() }
     
+    // UI State
     var searchQuery by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(true) }
+    var isSaving by remember { mutableStateOf(false) } // 🚀 Status Saving
 
-    val filteredClassNames = if (searchQuery.isEmpty()) {
-        allClassNames
-    } else {
-        allClassNames.filter { it.contains(searchQuery, ignoreCase = true) }
+    // Filter Logic
+    val filteredClassNames = remember(searchQuery, allClassNames) {
+        if (searchQuery.isEmpty()) allClassNames
+        else allClassNames.filter { it.contains(searchQuery, ignoreCase = true) }
     }
 
-    // LaunchedEffect(userId) {
-    //     try {
-    //         // 1. Ambil SEMUA dokumen dari koleksi 'options' tanpa filter dulu
-    //         val optionsSnapshot = db.collection("options").get().await()
-            
-    //         // Log untuk debug di Logcat
-    //         Log.d("EditScope", "Total dokumen ditemukan di 'options': ${optionsSnapshot.size()}")
-
-    //         val classes = optionsSnapshot.documents.map { doc ->
-    //             val name = doc.getString("name") ?: ""
-    //             val type = doc.getString("type") ?: "Kosong"
-    //             Log.d("EditScope", "Dokumen: $name, Type: $type")
-    //             name
-    //         }.filter { it.isNotEmpty() }.sorted()
-
-    //         allClassNames.clear()
-    //         allClassNames.addAll(classes)
-
-    //         // 2. Ambil Data User
-    //         val userDoc = db.collection("users").document(userId).get().await()
-    //         email = userDoc.getString("email") ?: ""
-    //         selectedRole = userDoc.getString("role") ?: "USER"
-            
-    //         val assigned = userDoc.get("assigned_classes") as? List<String> ?: emptyList()
-    //         selectedClasses.clear()
-    //         selectedClasses.addAll(assigned)
-            
-    //         isLoading = false
-    //     } catch (e: Exception) {
-    //         Log.e("EditScope", "Error loading data", e)
-    //         Toast.makeText(context, "Gagal: ${e.message}", Toast.LENGTH_SHORT).show()
-    //         isLoading = false
-    //     }
-    // }
-
-
+    // Load Data
     LaunchedEffect(userId) {
+        isLoading = true
         try {
-            // 1. Ambil Semua Data Murid untuk Ekstrak Nama Kelas Unik
-            val studentsSnapshot = db.collection("students").get().await()
+            // 1. Ambil Daftar Kelas Unik dari Koleksi Students (Bukan Options)
+            // Ini memastikan kelas yang muncul adalah yang BENAR-BENAR ADA muridnya
+            val studentsSnapshot = db.collection(Constants.COLL_STUDENTS).get().await()
             
-            // Mengambil field 'className', menghilangkan duplikat, dan mengurutkan A-Z
             val classes = studentsSnapshot.documents
                 .mapNotNull { it.getString("className") }
                 .filter { it.isNotEmpty() }
-                .distinct() // 🔥 Mengambil nilai unik (tidak ada kelas ganda di list)
+                .distinct()
                 .sorted()
-
-            Log.d("EditScope", "Daftar kelas unik ditemukan: $classes")
 
             allClassNames.clear()
             allClassNames.addAll(classes)
+            Log.d("EditScope", "Kelas ditemukan: ${classes.size}")
 
-            // 2. Ambil Data User (Guru) yang akan diedit
-            val userDoc = db.collection("users").document(userId).get().await()
-            email = userDoc.getString("email") ?: ""
+            // 2. Ambil Data User Target
+            val userDoc = db.collection(Constants.COLL_USERS).document(userId).get().await()
+            email = userDoc.getString("email") ?: "No Email"
             selectedRole = userDoc.getString("role") ?: "USER"
             
             val assigned = userDoc.get("assigned_classes") as? List<String> ?: emptyList()
             selectedClasses.clear()
             selectedClasses.addAll(assigned)
             
-            isLoading = false
         } catch (e: Exception) {
-            Log.e("EditScope", "Error loading data from students", e)
-            Toast.makeText(context, "Gagal memuat kelas: ${e.message}", Toast.LENGTH_SHORT).show()
+            Log.e("EditScope", "Gagal load data", e)
+            Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
+        } finally {
             isLoading = false
         }
     }
+
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Assign Kelas") },
+                title = { 
+                    Column {
+                        Text("Akses Guru", fontWeight = FontWeight.Bold)
+                        Text(email, style = MaterialTheme.typography.bodySmall)
+                    }
+                },
                 navigationIcon = {
-                    IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, null) }
+                    IconButton(onClick = onBack) { 
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Kembali") 
+                    }
                 },
                 actions = {
-                    if (!isLoading) {
+                    if (!isLoading && !isSaving) {
                         Button(
                             onClick = {
                                 scope.launch {
+                                    isSaving = true
                                     try {
-                                        db.collection("users").document(userId).update(
+                                        db.collection(Constants.COLL_USERS).document(userId).update(
                                             mapOf(
                                                 "role" to selectedRole,
                                                 "assigned_classes" to selectedClasses.toList()
                                             )
                                         ).await()
-                                        Toast.makeText(context, "Berhasil diupdate!", Toast.LENGTH_SHORT).show()
+                                        
+                                        Toast.makeText(context, "Akses Disimpan!", Toast.LENGTH_SHORT).show()
                                         onBack()
                                     } catch (e: Exception) {
-                                        Toast.makeText(context, "Gagal simpan: ${e.message}", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, "Gagal: ${e.message}", Toast.LENGTH_SHORT).show()
+                                        isSaving = false
                                     }
                                 }
                             },
@@ -149,6 +130,11 @@ fun EditUserScopeScreen(
                             Spacer(Modifier.width(8.dp))
                             Text("Simpan")
                         }
+                    } else if (isSaving) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.padding(end = 16.dp).size(24.dp),
+                            strokeWidth = 2.dp
+                        )
                     }
                 }
             )
@@ -159,15 +145,18 @@ fun EditUserScopeScreen(
                 CircularProgressIndicator()
             }
         } else {
-            Column(modifier = Modifier.padding(padding).padding(16.dp)) {
-                Text("Guru: $email", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
-                Spacer(modifier = Modifier.height(16.dp))
-                
+            Column(
+                modifier = Modifier
+                    .padding(padding)
+                    .padding(16.dp)
+                    .fillMaxSize()
+            ) {
+                // Search Bar
                 OutlinedTextField(
                     value = searchQuery,
                     onValueChange = { searchQuery = it },
                     modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("Cari Nama Kelas...") },
+                    placeholder = { Text("Cari Kelas...") },
                     leadingIcon = { Icon(Icons.Default.Search, null) },
                     trailingIcon = {
                         if (searchQuery.isNotEmpty()) {
@@ -176,25 +165,56 @@ fun EditUserScopeScreen(
                             }
                         }
                     },
-                    shape = MaterialTheme.shapes.medium,
-                    singleLine = true
+                    singleLine = true,
+                    shape = MaterialTheme.shapes.medium
                 )
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                Text(
-                    "Terpilih: ${selectedClasses.size} Kelas",
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.Bold
-                )
+                // Status Selection
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "Kelas Terpilih: ${selectedClasses.size}",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    
+                    if (selectedClasses.isNotEmpty()) {
+                        TextButton(onClick = { selectedClasses.clear() }) {
+                            Text("Reset")
+                        }
+                    }
+                }
 
-                LazyColumn(modifier = Modifier.weight(1f)) {
-                    items(filteredClassNames) { className ->
+                Divider(modifier = Modifier.padding(vertical = 8.dp))
+
+                // List Kelas
+                LazyColumn(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    items(items = filteredClassNames, key = { it }) { className ->
                         val isChecked = selectedClasses.contains(className)
                         
-                        ListItem(
-                            headlineContent = { Text(className) },
-                            leadingContent = {
+                        Surface(
+                            shape = MaterialTheme.shapes.small,
+                            color = if (isChecked) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    if (isChecked) selectedClasses.remove(className)
+                                    else selectedClasses.add(className)
+                                }
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
                                 Checkbox(
                                     checked = isChecked,
                                     onCheckedChange = { checked ->
@@ -202,18 +222,28 @@ fun EditUserScopeScreen(
                                         else selectedClasses.remove(className)
                                     }
                                 )
-                            },
-                            modifier = Modifier.clickable {
-                                if (isChecked) selectedClasses.remove(className)
-                                else selectedClasses.add(className)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = className,
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = if (isChecked) FontWeight.Bold else FontWeight.Normal
+                                )
                             }
-                        )
+                        }
                     }
                     
-                    if (filteredClassNames.isEmpty() && searchQuery.isNotEmpty()) {
+                    if (filteredClassNames.isEmpty()) {
                         item {
-                            Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                                Text("Kelas '$searchQuery' tidak ditemukan.", color = Color.Gray)
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(32.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = if(searchQuery.isEmpty()) "Tidak ada data kelas." else "Kelas '$searchQuery' tidak ditemukan.",
+                                    color = Color.Gray
+                                )
                             }
                         }
                     }

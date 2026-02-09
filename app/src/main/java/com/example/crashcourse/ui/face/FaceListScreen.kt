@@ -1,7 +1,5 @@
 package com.example.crashcourse.ui
 
-import androidx.compose.runtime.*
-import androidx.compose.material3.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -9,115 +7,155 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.viewmodel.compose.viewModel
-import com.example.crashcourse.ui.components.FaceAvatar
-import com.example.crashcourse.db.FaceEntity
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.example.crashcourse.viewmodel.FaceViewModel
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.crashcourse.db.*
+import com.example.crashcourse.ui.components.FaceAvatar
+import com.example.crashcourse.ui.components.StudentFormBody
+import com.example.crashcourse.ui.theme.AzuraPrimary
 import com.example.crashcourse.viewmodel.AuthState
+import com.example.crashcourse.viewmodel.FaceViewModel
+import com.example.crashcourse.viewmodel.OptionsViewModel
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FaceListScreen(
     authState: AuthState.Active,
-    viewModel: FaceViewModel = viewModel(),
-    onEditUser: (FaceEntity) -> Unit = {} // Ini navigasi ke layar ambil foto
+    faceViewModel: FaceViewModel = viewModel(),
+    optionsViewModel: OptionsViewModel = viewModel(),
+    onEditUser: (FaceEntity) -> Unit = {}
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     
-    // --- DATA MASTER UNTUK DROPDOWN ---
-    val classOptions by viewModel.classOptions.collectAsStateWithLifecycle()
-    val gradeOptions by viewModel.gradeOptions.collectAsStateWithLifecycle()
-    val programOptions by viewModel.programOptions.collectAsStateWithLifecycle()
+    // Master Data
+    val classOptions by optionsViewModel.classOptions.collectAsStateWithLifecycle(emptyList())
+    val subClassOptions by optionsViewModel.subClassOptions.collectAsStateWithLifecycle(emptyList())
+    val gradeOptions by optionsViewModel.gradeOptions.collectAsStateWithLifecycle(emptyList())
+    val subGradeOptions by optionsViewModel.subGradeOptions.collectAsStateWithLifecycle(emptyList())
+    val programOptions by optionsViewModel.programOptions.collectAsStateWithLifecycle(emptyList())
+    val roleOptions by optionsViewModel.roleOptions.collectAsStateWithLifecycle(emptyList())
     
-    // --- DATA MURID (TEACHER SCOPE) ---
-    val scopedFlow = remember(authState.uid) { viewModel.getScopedFaceList(authState) }
-    val allFaces by scopedFlow.collectAsStateWithLifecycle()
-    
+    val allFaces by faceViewModel.getScopedFaceList(authState).collectAsStateWithLifecycle(emptyList())
     var searchQuery by remember { mutableStateOf("") }
     val isAdmin = authState.role == "ADMIN"
 
-    val filteredFaces by remember {
-        derivedStateOf { allFaces.filter { it.name.contains(searchQuery, ignoreCase = true) } }
+    val filteredFaces by remember(allFaces, searchQuery) {
+        derivedStateOf { 
+            allFaces.filter { it.name.contains(searchQuery, ignoreCase = true) } 
+        }
     }
 
-    // --- DIALOG EDIT DETAIL STATE ---
+    // --- STATE DIALOG ---
     var editingFace by remember { mutableStateOf<FaceEntity?>(null) }
+    var faceToDelete by remember { mutableStateOf<FaceEntity?>(null) }
+    
+    // State Form Edit
     var editName by remember { mutableStateOf("") }
-    var editClass by remember { mutableStateOf("") }
-    var editGrade by remember { mutableStateOf("") }
-    var editProgram by remember { mutableStateOf("") }
+    var selectedClass by remember { mutableStateOf<ClassOption?>(null) }
+    var selectedSubClass by remember { mutableStateOf<SubClassOption?>(null) }
+    var selectedGrade by remember { mutableStateOf<GradeOption?>(null) }
+    var selectedSubGrade by remember { mutableStateOf<SubGradeOption?>(null) }
+    var selectedProgram by remember { mutableStateOf<ProgramOption?>(null) }
+    var selectedRole by remember { mutableStateOf<RoleOption?>(null) }
 
-    if (isAdmin) {
+    // Init data saat dialog dibuka
+    LaunchedEffect(editingFace) {
         editingFace?.let { face ->
-            AlertDialog(
-                onDismissRequest = { editingFace = null },
-                title = { Text("Update Profil Murid") },
-                text = {
-                    Column(
-                        modifier = Modifier.verticalScroll(rememberScrollState()),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        OutlinedTextField(
-                            value = editName, 
-                            onValueChange = { editName = it }, 
-                            label = { Text("Nama Lengkap") },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-
-                        // Dropdown Pilihan Kelas dari Master Data
-                        MasterDataDropdown(
-                            label = "Kelas",
-                            options = classOptions.map { it.name },
-                            selectedOption = editClass,
-                            onOptionSelected = { editClass = it }
-                        )
-
-                        MasterDataDropdown(
-                            label = "Grade",
-                            options = gradeOptions.map { it.name },
-                            selectedOption = editGrade,
-                            onOptionSelected = { editGrade = it }
-                        )
-
-                        MasterDataDropdown(
-                            label = "Program",
-                            options = programOptions.map { it.name },
-                            selectedOption = editProgram,
-                            onOptionSelected = { editProgram = it }
-                        )
-                        
-                        Text(
-                            "ID Murid: ${face.studentId}", 
-                            style = MaterialTheme.typography.labelSmall,
-                            color = Color.Gray
-                        )
-                    }
-                },
-                confirmButton = {
-                    Button(onClick = {
-                        viewModel.updateFace(
-                            face.copy(
-                                name = editName,
-                                className = editClass,
-                                grade = editGrade,
-                                program = editProgram
-                            )
-                        ) { editingFace = null }
-                    }) { Text("Simpan") }
-                },
-                dismissButton = {
-                    TextButton(onClick = { editingFace = null }) { Text("Batal") }
-                }
-            )
+            editName = face.name
+            selectedClass = classOptions.find { it.id == face.classId || it.name == face.className }
+            selectedSubClass = subClassOptions.find { it.id == face.subClassId || it.name == face.subClass }
+            selectedGrade = gradeOptions.find { it.id == face.gradeId || it.name == face.grade }
+            selectedSubGrade = subGradeOptions.find { it.id == face.subGradeId || it.name == face.subGrade }
+            selectedProgram = programOptions.find { it.id == face.programId || it.name == face.program }
+            selectedRole = roleOptions.find { it.id == face.roleId || it.name == face.role }
         }
+    }
+
+    // ==========================================
+    // 1. DIALOG KONFIRMASI DELETE
+    // ==========================================
+    if (isAdmin && faceToDelete != null) {
+        val face = faceToDelete!!
+        AlertDialog(
+            onDismissRequest = { faceToDelete = null },
+            title = { Text("Hapus Data Wajah?") },
+            text = { 
+                Text("Apakah Anda yakin ingin menghapus data ${face.name}? Tindakan ini akan menghapus data di Lokal dan Cloud secara permanen.") 
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        faceViewModel.deleteFace(face)
+                        faceToDelete = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                ) { Text("Hapus") }
+            },
+            dismissButton = {
+                TextButton(onClick = { faceToDelete = null }) { Text("Batal") }
+            }
+        )
+    }
+
+    // ==========================================
+    // 2. DIALOG UI (Quick Edit Profil)
+    // ==========================================
+    if (isAdmin && editingFace != null) {
+        val face = editingFace!!
+        AlertDialog(
+            onDismissRequest = { editingFace = null },
+            title = { Text("Update Profil Murid", fontWeight = FontWeight.Bold) },
+            text = {
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                    StudentFormBody(
+                        name = editName, onNameChange = { editName = it },
+                        selectedClass = selectedClass, onClassChange = { selectedClass = it },
+                        selectedSubClass = selectedSubClass, onSubClassChange = { selectedSubClass = it },
+                        selectedGrade = selectedGrade, onGradeChange = { selectedGrade = it },
+                        selectedSubGrade = selectedSubGrade, onSubGradeChange = { selectedSubGrade = it },
+                        selectedProgram = selectedProgram, onProgramChange = { selectedProgram = it },
+                        selectedRole = selectedRole, onRoleChange = { selectedRole = it },
+                        classOptions = classOptions, subClassOptions = subClassOptions,
+                        gradeOptions = gradeOptions, subGradeOptions = subGradeOptions,
+                        programOptions = programOptions, roleOptions = roleOptions
+                    )
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    faceViewModel.updateFace(
+                        face.copy(
+                            name = editName,
+                            className = selectedClass?.name ?: face.className,
+                            classId = selectedClass?.id ?: face.classId,
+                            subClass = selectedSubClass?.name ?: face.subClass,
+                            subClassId = selectedSubClass?.id ?: face.subClassId,
+                            grade = selectedGrade?.name ?: face.grade,
+                            gradeId = selectedGrade?.id ?: face.gradeId,
+                            subGrade = selectedSubGrade?.name ?: face.subGrade,
+                            subGradeId = selectedSubGrade?.id ?: face.subGradeId,
+                            program = selectedProgram?.name ?: face.program,
+                            programId = selectedProgram?.id ?: face.programId,
+                            role = selectedRole?.name ?: face.role,
+                            roleId = selectedRole?.id ?: face.roleId
+                        )
+                    ) { editingFace = null }
+                }) { Text("Simpan") }
+            },
+            dismissButton = {
+                TextButton(onClick = { editingFace = null }) { Text("Batal") }
+            }
+        )
     }
 
     Scaffold(
@@ -125,149 +163,84 @@ fun FaceListScreen(
             TopAppBar(
                 title = { 
                     Column {
-                        Text("Manajemen Murid")
+                        Text("Daftar Murid", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                         Text(
-                            text = if (isAdmin) "Full Access" else "Scope: ${authState.assignedClasses.joinToString()}",
-                            style = MaterialTheme.typography.labelSmall
+                            text = if (isAdmin) "Akses: Admin" else "Guru: ${authState.email}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary
                         )
                     }
                 },
                 actions = {
-                    IconButton(onClick = { scope.launch { com.example.crashcourse.db.FaceCache.refresh(context) } }) {
-                        Icon(Icons.Default.Refresh, "Refresh")
+                    IconButton(onClick = { 
+                        faceViewModel.syncStudentsWithCloud(authState) 
+                    }) {
+                        Icon(Icons.Default.Refresh, "Sync Cloud")
                     }
                 }
             )
         }
     ) { padding ->
-        Column(modifier = Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
+        Column(modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp)) {
             OutlinedTextField(
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
-                label = { Text("Cari nama murid...") },
+                label = { Text("Cari nama...") },
                 modifier = Modifier.fillMaxWidth(),
                 leadingIcon = { Icon(Icons.Default.Search, null) },
-                trailingIcon = {
-                    if (searchQuery.isNotEmpty()) {
-                        IconButton(onClick = { searchQuery = "" }) { Icon(Icons.Default.Clear, null) }
-                    }
-                }
+                shape = MaterialTheme.shapes.medium
             )
             
             Spacer(Modifier.height(16.dp))
 
             LazyColumn(
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.fillMaxSize()
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(bottom = 20.dp)
             ) {
+                if (filteredFaces.isEmpty()) {
+                    item {
+                        Box(Modifier.fillParentMaxSize(), contentAlignment = Alignment.Center) {
+                            Text("Tidak ada data murid", color = Color.Gray)
+                        }
+                    }
+                }
+
+                // 🚀 PERBAIKAN DI SINI: Ganti it.id menjadi it.studentId
                 items(items = filteredFaces, key = { it.studentId }) { face ->
                     Card(
                         modifier = Modifier.fillMaxWidth(),
-                        onClick = {
-                            if (isAdmin) {
-                                editingFace = face
-                                editName = face.name
-                                editClass = face.className
-                                editGrade = face.grade
-                                editProgram = face.program
-                            }
-                        }
+                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                     ) {
                         Row(
-                            modifier = Modifier.padding(16.dp),
+                            modifier = Modifier.padding(12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            FaceAvatar(photoPath = face.photoUrl, size = 64)
-                            Spacer(modifier = Modifier.width(16.dp))
+                            FaceAvatar(photoPath = face.photoUrl, size = 56)
+                            Spacer(modifier = Modifier.width(12.dp))
                             Column(modifier = Modifier.weight(1f)) {
-                                Text(text = face.name, style = MaterialTheme.typography.titleMedium)
+                                Text(text = face.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                                 Text(
-                                    text = "${face.className} • ${face.grade} • ${face.program}", 
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    text = "${face.className} • ${face.grade}", 
+                                    style = MaterialTheme.typography.bodySmall, 
+                                    color = Color.Gray
                                 )
                             }
-                            if (!isAdmin) Icon(Icons.Default.Lock, null, modifier = Modifier.size(16.dp), tint = Color.Gray)
-                        }
-                        
-                        if (isAdmin) {
-                            Row(
-                                modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                // TOMBOL 1: Edit Data (Dialog)
-                                TextButton(onClick = {
-                                    editingFace = face
-                                    editName = face.name
-                                    editClass = face.className
-                                    editGrade = face.grade
-                                    editProgram = face.program
-                                }) {
-                                    Icon(Icons.Default.Edit, null, modifier = Modifier.size(16.dp))
-                                    Spacer(Modifier.width(4.dp))
-                                    Text("Data")
+                            if (isAdmin) {
+                                IconButton(onClick = { editingFace = face }) {
+                                    Icon(Icons.Default.Edit, "Edit", tint = AzuraPrimary, modifier = Modifier.size(20.dp))
                                 }
-
-                                // TOMBOL 2: Edit Foto (Navigasi ke Kamera + Embedding)
-                                TextButton(onClick = { onEditUser(face) }) {
-                                    Icon(Icons.Default.PhotoCamera, null, modifier = Modifier.size(16.dp))
-                                    Spacer(Modifier.width(4.dp))
-                                    Text("Foto")
+                                IconButton(onClick = { onEditUser(face) }) {
+                                    Icon(Icons.Default.CameraAlt, "Foto", tint = Color.Gray, modifier = Modifier.size(20.dp))
                                 }
-
-                                Spacer(Modifier.weight(1f))
-
-                                // TOMBOL 3: Hapus
-                                IconButton(onClick = { viewModel.deleteFace(face) }) {
-                                    Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error)
+                                IconButton(onClick = { faceToDelete = face }) {
+                                    Icon(Icons.Default.Delete, "Delete", tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(20.dp))
                                 }
                             }
                         }
                     }
                 }
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun MasterDataDropdown(
-    label: String,
-    options: List<String>,
-    selectedOption: String,
-    onOptionSelected: (String) -> Unit
-) {
-    var expanded by remember { mutableStateOf(false) }
-
-    ExposedDropdownMenuBox(
-        expanded = expanded,
-        onExpandedChange = { expanded = !expanded },
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        OutlinedTextField(
-            value = selectedOption,
-            onValueChange = {},
-            readOnly = true,
-            label = { Text(label) },
-            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-            modifier = Modifier.menuAnchor().fillMaxWidth(),
-            colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors()
-        )
-
-        ExposedDropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false }
-        ) {
-            options.forEach { selectionOption ->
-                DropdownMenuItem(
-                    text = { Text(selectionOption) },
-                    onClick = {
-                        onOptionSelected(selectionOption)
-                        expanded = false
-                    },
-                    contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding
-                )
             }
         }
     }

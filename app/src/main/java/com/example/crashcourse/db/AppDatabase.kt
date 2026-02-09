@@ -18,7 +18,7 @@ import com.example.crashcourse.utils.Converters
         FaceEntity::class,
         CheckInRecord::class
     ],
-    version = 6, // ✅ Versi Terbaru
+    version = 7, // ✅ Versi Terbaru
     exportSchema = false
 )
 @TypeConverters(Converters::class) // ✅ Memanggil file Converters.kt di atas

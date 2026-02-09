@@ -2,15 +2,18 @@ package com.example.crashcourse.viewmodel
 
 import android.util.Log
 import androidx.lifecycle.ViewModel
-import com.google.firebase.Timestamp
+import androidx.lifecycle.viewModelScope
+import com.example.crashcourse.utils.Constants // 🚀 Import Constants
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.*
 
-data class AttendanceStat(
+// Sesuaikan nama class dengan UI (AttendanceStats)
+data class AttendanceStats(
     val total: Int = 0,
     val present: Int = 0,
     val sick: Int = 0,
@@ -19,6 +22,7 @@ data class AttendanceStat(
 )
 
 data class LiveLog(
+    val id: String, // 🚀 Wajib ada untuk LazyColumn Key
     val name: String,
     val status: String,
     val time: String,
@@ -29,7 +33,7 @@ class DashboardViewModel : ViewModel() {
     private val db = FirebaseFirestore.getInstance()
     private val TAG = "DashboardVM"
 
-    private val _stats = MutableStateFlow(AttendanceStat())
+    private val _stats = MutableStateFlow(AttendanceStats())
     val stats = _stats.asStateFlow()
 
     private val _logs = MutableStateFlow<List<LiveLog>>(emptyList())
@@ -42,26 +46,23 @@ class DashboardViewModel : ViewModel() {
     private fun listenToLiveAttendance() {
         // --- LOGIKA FILTER TANGGAL HARI INI ---
         val calendar = Calendar.getInstance()
-        
-        // Set ke jam 00:00:00 hari ini
         calendar.set(Calendar.HOUR_OF_DAY, 0)
         calendar.set(Calendar.MINUTE, 0)
         calendar.set(Calendar.SECOND, 0)
         calendar.set(Calendar.MILLISECOND, 0)
         val startOfToday = calendar.time
 
-        // Format untuk jam menit (HH:mm)
         val timeFormatter = SimpleDateFormat("HH:mm", Locale.getDefault())
 
-        Log.d(TAG, "Mencari data Timestamp mulai dari: $startOfToday")
+        Log.d(TAG, "Mulai monitoring: $startOfToday")
 
-        db.collection("attendance_logs")
-            // ✅ Filter berdasarkan objek Date/Timestamp
-            .whereGreaterThanOrEqualTo("timestamp", startOfToday)
-            .orderBy("timestamp", Query.Direction.DESCENDING)
+        // 🚀 Gunakan Constants.COLL_ATTENDANCE ("attendance") agar sinkron dengan CheckIn
+        db.collection(Constants.COLL_ATTENDANCE)
+            .whereGreaterThanOrEqualTo(Constants.FIELD_TIMESTAMP, startOfToday)
+            .orderBy(Constants.FIELD_TIMESTAMP, Query.Direction.DESCENDING)
             .addSnapshotListener { snapshot, e ->
                 if (e != null) {
-                    Log.e(TAG, "Listen failed! Pastikan field 'timestamp' di Firestore bertipe Timestamp (bukan String). Error: ${e.message}")
+                    Log.e(TAG, "Gagal Listen Live Data: ${e.message}")
                     return@addSnapshotListener
                 }
 
@@ -70,26 +71,21 @@ class DashboardViewModel : ViewModel() {
                     var p = 0; var s = 0; var i = 0; var a = 0
 
                     for (doc in snapshot) {
-                        // ✅ Baca sebagai Timestamp
-                        val firestoreTimestamp = doc.getTimestamp("timestamp")
+                        val firestoreTimestamp = doc.getTimestamp(Constants.FIELD_TIMESTAMP)
                         val status = (doc.getString("status") ?: "ALPHA").uppercase()
 
                         // Hitung statistik
                         when (status) {
-                            "PRESENT" -> p++
-                            "SAKIT" -> s++
-                            "IZIN" -> i++
-                            "ALPHA" -> a++
+                            "PRESENT", "LATE" -> p++
+                            "SAKIT", "SICK" -> s++
+                            "IZIN", "PERMIT" -> i++
+                            else -> a++ // ALPHA
                         }
 
-                        // Konversi Timestamp ke jam menit (HH:mm)
-                        val timeDisplay = if (firestoreTimestamp != null) {
-                            timeFormatter.format(firestoreTimestamp.toDate())
-                        } else {
-                            "--:--"
-                        }
+                        val timeDisplay = firestoreTimestamp?.toDate()?.let { timeFormatter.format(it) } ?: "--:--"
 
                         newLogs.add(LiveLog(
+                            id = doc.id, // 🚀 Ambil ID Dokumen untuk Key UI
                             name = doc.getString("name") ?: "Unknown",
                             status = status,
                             time = timeDisplay,
@@ -97,12 +93,11 @@ class DashboardViewModel : ViewModel() {
                         ))
                     }
 
-                    _stats.value = AttendanceStat(
+                    _stats.value = AttendanceStats(
                         total = newLogs.size,
                         present = p, sick = s, permit = i, alpha = a
                     )
                     _logs.value = newLogs
-                    Log.d(TAG, "Update Berhasil: ${newLogs.size} data ditemukan hari ini.")
                 }
             }
     }

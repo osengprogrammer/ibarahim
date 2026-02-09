@@ -4,7 +4,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.items // 🚀 Import Penting
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.*
@@ -15,9 +15,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
-// Import Screen agar rute terbaca dengan benar
 import com.example.crashcourse.navigation.Screen
 
 // Data class untuk Menu Admin
@@ -32,14 +32,23 @@ data class AdminMenuItem(
 fun AdminDashboardScreen(navController: NavController) {
     // Definisi item menu
     val adminMenus = listOf(
-        AdminMenuItem("Single Register", Icons.Default.PersonAdd, Screen.RegistrationMenu.route, Color(0xFF4CAF50)),
-        AdminMenuItem("Bulk Register", Icons.Default.CloudUpload, Screen.BulkRegister.route, Color(0xFF2196F3)),
-        AdminMenuItem("Manage Faces", Icons.AutoMirrored.Filled.List, Screen.Manage.route, Color(0xFFFF9800)),
-        AdminMenuItem("Live Monitor", Icons.Default.Assessment, Screen.LiveMonitor.route, Color(0xFFE91E63)),
-        AdminMenuItem("Manage Staff", Icons.Default.Group, Screen.UserManagement.route, Color(0xFF673AB7)),
+        // 1. Menu Pendaftaran (Hub ke Camera/Gallery/Bulk)
+        AdminMenuItem("Menu Pendaftaran", Icons.Default.AppRegistration, Screen.RegistrationMenu.route, Color(0xFF4CAF50)),
         
-        // 🔥 UPDATE: Master Data sekarang langsung mengarah ke Options (Option Management)
-        AdminMenuItem("Master Data", Icons.Default.SettingsSuggest, Screen.Options.route, Color(0xFF9C27B0))
+        // 2. Upload CSV Langsung (Shortcut)
+        AdminMenuItem("Bulk Upload", Icons.Default.CloudUpload, Screen.BulkRegister.route, Color(0xFF2196F3)),
+        
+        // 3. Daftar Wajah (Manage Faces)
+        AdminMenuItem("Data Wajah", Icons.AutoMirrored.Filled.List, Screen.Manage.route, Color(0xFFFF9800)),
+        
+        // 4. Live Monitor
+        AdminMenuItem("Live Monitor", Icons.Default.MonitorHeart, Screen.LiveMonitor.route, Color(0xFFE91E63)),
+        
+        // 5. Manage Staff
+        AdminMenuItem("Staff & Guru", Icons.Default.ManageAccounts, Screen.UserManagement.route, Color(0xFF673AB7)),
+        
+        // 6. Master Data (Options)
+        AdminMenuItem("Master Data", Icons.Default.Category, Screen.Options.route, Color(0xFF9C27B0))
     )
 
     Column(
@@ -48,7 +57,7 @@ fun AdminDashboardScreen(navController: NavController) {
             .padding(16.dp)
     ) {
         Text(
-            text = "Panel Admin AzuraTech",
+            text = "Panel Admin",
             style = MaterialTheme.typography.headlineMedium,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.primary,
@@ -56,7 +65,7 @@ fun AdminDashboardScreen(navController: NavController) {
         )
         
         Text(
-            text = "Pusat kendali pendaftaran dan konfigurasi sistem.",
+            text = "Pusat kendali sistem AzuraTech.",
             style = MaterialTheme.typography.bodyMedium,
             color = Color.Gray,
             modifier = Modifier.padding(bottom = 24.dp)
@@ -69,8 +78,7 @@ fun AdminDashboardScreen(navController: NavController) {
             modifier = Modifier.fillMaxSize()
         ) {
             items(adminMenus) { menu ->
-                AdminMenuCard(menu) {
-                    // Berpindah ke rute yang ditentukan (misal: OptionsManagementScreen)
+                AdminMenuCard(item = menu) {
                     navController.navigate(menu.route)
                 }
             }
@@ -83,27 +91,29 @@ fun AdminMenuCard(item: AdminMenuItem, onClick: () -> Unit) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .height(140.dp)
+            .height(130.dp)
             .clickable { onClick() },
-        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
     ) {
         Column(
-            modifier = Modifier.fillMaxSize().padding(12.dp),
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(12.dp),
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Surface(
                 shape = MaterialTheme.shapes.medium,
-                color = item.color.copy(alpha = 0.15f),
-                modifier = Modifier.size(50.dp)
+                color = item.color.copy(alpha = 0.1f),
+                modifier = Modifier.size(48.dp)
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
                         imageVector = item.icon,
                         contentDescription = null,
                         tint = item.color,
-                        modifier = Modifier.size(28.dp)
+                        modifier = Modifier.size(24.dp)
                     )
                 }
             }
@@ -114,7 +124,7 @@ fun AdminMenuCard(item: AdminMenuItem, onClick: () -> Unit) {
                 text = item.title,
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.Bold,
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                textAlign = TextAlign.Center
             )
         }
     }

@@ -20,48 +20,51 @@ import java.nio.ByteOrder
 object PhotoProcessingUtils {
     private const val TAG = "PhotoProcessingUtils"
     
-    // ✅ Updated to 112 to match your new MobileFaceNet model metadata
+    // ✅ Standar MobileFaceNet: 112x112
     private const val INPUT_SIZE = 112 
 
     /**
-     * Process a bitmap to detect faces and generate embeddings
+     * Memproses bitmap galeri menjadi embedding biometrik.
+     * Outputnya adalah Pair berisi Bitmap Wajah (untuk preview) dan FloatArray (untuk database).
      */
     suspend fun processBitmapForFaceEmbedding(
         @Suppress("UNUSED_PARAMETER") context: Context,
         bitmap: Bitmap
     ): Pair<Bitmap, FloatArray>? = withContext(Dispatchers.IO) {
         try {
-            // Resize bitmap if too large for better performance
+            // 1. Normalisasi resolusi awal agar deteksi ML Kit ringan
             val processedBitmap = if (bitmap.width > 1024 || bitmap.height > 1024) {
                 PhotoStorageUtils.resizeBitmap(bitmap, 1024)
             } else {
                 bitmap
             }
 
-            // Detect faces using ML Kit
+            // 2. Deteksi wajah menggunakan ML Kit
             val faces = detectFacesInBitmap(processedBitmap)
 
             if (faces.isEmpty()) {
-                Log.w(TAG, "No faces detected in the image")
+                Log.w(TAG, "Wajah tidak ditemukan di foto galeri.")
                 return@withContext null
             }
 
-            // Use the largest face found
+            // 3. Ambil wajah terbesar (asumsi itu adalah subjek utama)
             val largestFace = faces.maxByOrNull { it.width() * it.height() }
                 ?: return@withContext null
 
-            Log.d(TAG, "Processing face at: $largestFace")
+            Log.d(TAG, "Memproses wajah pada koordinat: $largestFace")
 
-            // Crop and process
+            // 4. Crop wajah dengan padding standar (agar AI bisa melihat telinga/dahi sedikit)
             val faceBitmap = cropFaceFromBitmap(processedBitmap, largestFace)
+            
+            // 5. Generate biometrik (embedding)
             val embedding = generateEmbeddingFromFaceBitmap(faceBitmap)
 
-            Log.d(TAG, "Successfully generated embedding with ${embedding.size} dimensions")
+            Log.d(TAG, "Embedding sukses dibuat: ${embedding.size} dimensi")
 
             Pair(faceBitmap, embedding)
 
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to process bitmap for face embedding", e)
+            Log.e(TAG, "Gagal memproses foto galeri", e)
             null
         }
     }
@@ -72,25 +75,23 @@ object PhotoProcessingUtils {
             val detector = FaceDetection.getClient(
                 FaceDetectorOptions.Builder()
                     .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_ACCURATE)
-                    .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_NONE)
-                    .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_NONE)
                     .build()
             )
 
             detector.process(image)
                 .addOnSuccessListener { faces ->
                     val faceRects = faces.map { it.boundingBox }
-                    Log.d(TAG, "Detected ${faceRects.size} faces")
                     continuation.resume(faceRects)
                 }
                 .addOnFailureListener { e ->
-                    Log.e(TAG, "Face detection failed", e)
+                    Log.e(TAG, "ML Kit Error", e)
                     continuation.resume(emptyList())
                 }
         }
 
     private fun cropFaceFromBitmap(bitmap: Bitmap, faceRect: Rect): Bitmap {
-        val padding = 0.2f
+        // Padding 15% agar framing wajah mirip dengan hasil live camera
+        val padding = 0.15f 
         val paddingX = (faceRect.width() * padding).toInt()
         val paddingY = (faceRect.height() * padding).toInt()
 
@@ -106,37 +107,43 @@ object PhotoProcessingUtils {
     }
 
     private fun generateEmbeddingFromFaceBitmap(faceBitmap: Bitmap): FloatArray {
-        // ✅ Resize to 112x112 for the new model
+        // Force resize ke 112x112 agar sinkron dengan input model
         val resizedBitmap = faceBitmap.scale(INPUT_SIZE, INPUT_SIZE)
 
-        // Convert to ByteBuffer format expected by the model
+        // Konversi ke ByteBuffer
         val buffer = bitmapToByteBuffer(resizedBitmap)
 
-        // Generate embedding using FaceRecognizer
+        // Generate embedding (AI Inference)
         return FaceRecognizer.recognizeFace(buffer)
     }
 
     /**
-     * 🚀 NATIVE OPTIMIZATION
-     * Convert bitmap to ByteBuffer using C++ for high-speed normalization
+     * 🚀 SINKRONISASI BIOMETRIK
+     * Mengolah pixel bitmap menjadi format yang dimengerti MobileFaceNet lewat C++
      */
     private fun bitmapToByteBuffer(bitmap: Bitmap): ByteBuffer {
-        // 1. Allocate Direct Buffer (Width * Height * 3 channels * 4 bytes for Float)
         val buffer = ByteBuffer.allocateDirect(INPUT_SIZE * INPUT_SIZE * 3 * 4)
             .order(ByteOrder.nativeOrder())
 
         val intVals = IntArray(INPUT_SIZE * INPUT_SIZE)
-        bitmap.getPixels(intVals, 0, INPUT_SIZE, 0, 0, INPUT_SIZE, INPUT_SIZE)
+        // Paksa ke ARGB_8888 untuk ekstraksi channel RGB yang akurat
+        val argbBitmap = bitmap.copy(Bitmap.Config.ARGB_8888, true)
+        argbBitmap.getPixels(intVals, 0, INPUT_SIZE, 0, 0, INPUT_SIZE, INPUT_SIZE)
 
-        // 2. Put Raw RGB values (0-255) into buffer
         buffer.rewind()
         for (pixel in intVals) {
-            buffer.putFloat(((pixel shr 16) and 0xFF).toFloat()) // R
-            buffer.putFloat(((pixel shr 8) and 0xFF).toFloat())  // G
-            buffer.putFloat((pixel       and 0xFF).toFloat())    // B
+            // Ekstraksi warna RGB (Mengabaikan Alpha)
+            val r = ((pixel shr 16) and 0xFF).toFloat()
+            val g = ((pixel shr 8) and 0xFF).toFloat()
+            val b = (pixel and 0xFF).toFloat()
+            
+            buffer.putFloat(r)
+            buffer.putFloat(g)
+            buffer.putFloat(b)
         }
 
-        // 3. 🚀 Call Native C++ to handle the (x - 127.5) / 128.0 math
+        // 🚀 PRE-PROCESS NATIVE (The Secret Sauce)
+        // Melakukan normalisasi (x - 127.5) / 128 secara instan di level CPU/C++
         buffer.rewind()
         NativeMath.preprocessImage(buffer, INPUT_SIZE * INPUT_SIZE * 3)
         
@@ -146,33 +153,20 @@ object PhotoProcessingUtils {
     suspend fun validateFaceInBitmap(bitmap: Bitmap): Boolean = withContext(Dispatchers.IO) {
         try {
             val faces = detectFacesInBitmap(bitmap)
-            val hasValidFace = faces.isNotEmpty() && faces.any { face ->
-                face.width() >= 50 && face.height() >= 50
-            }
-            Log.d(TAG, "Face validation result: $hasValidFace (${faces.size} faces detected)")
-            hasValidFace
-        } catch (e: Exception) {
-            Log.e(TAG, "Face validation failed", e)
-            false
-        }
+            faces.isNotEmpty() && faces.any { it.width() >= 50 }
+        } catch (e: Exception) { false }
     }
 
     suspend fun getFaceConfidence(bitmap: Bitmap): Float = withContext(Dispatchers.IO) {
         try {
             val faces = detectFacesInBitmap(bitmap)
             if (faces.isEmpty()) return@withContext 0.0f
-
-            val largestFace = faces.maxByOrNull { it.width() * it.height() }
-                ?: return@withContext 0.0f
-
+            val largestFace = faces.maxByOrNull { it.width() * it.height() } ?: return@withContext 0.0f
+            
+            // Hitung rasio wajah terhadap total gambar
             val faceArea = largestFace.width() * largestFace.height()
             val imageArea = bitmap.width * bitmap.height
-            val sizeRatio = faceArea.toFloat() / imageArea.toFloat()
-
-            (sizeRatio * 10).coerceAtMost(1.0f)
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to calculate face confidence", e)
-            0.0f
-        }
+            (faceArea.toFloat() / imageArea.toFloat() * 10).coerceAtMost(1.0f)
+        } catch (e: Exception) { 0.0f }
     }
 }
