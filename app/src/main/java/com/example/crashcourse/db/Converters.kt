@@ -1,45 +1,55 @@
-package com.example.crashcourse.utils
+package com.example.crashcourse.db
 
 import androidx.room.TypeConverter
 import com.google.gson.Gson
-import java.time.Instant
+import com.google.gson.reflect.TypeToken
 import java.time.LocalDateTime
-import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
+/**
+ * 🔄 Azura Tech Type Converters
+ * Bertugas mengubah tipe data kompleks menjadi format yang dipahami SQLite (String/Long).
+ */
 class Converters {
-    // --- 🕒 Waktu (LocalDateTime <-> Long) ---
+    private val formatter = DateTimeFormatter.ISO_LOCAL_DATE_TIME
+    private val gson = Gson()
+
+    // --- 🕒 LocalDateTime Converters (Untuk Log Absensi) ---
+    // Mengubah String dari DB kembali menjadi objek waktu Kotlin
     @TypeConverter
-    fun fromTimestamp(value: Long?): LocalDateTime? {
-        return value?.let {
-            LocalDateTime.ofInstant(Instant.ofEpochMilli(it), ZoneId.systemDefault())
-        }
+    fun fromTimestamp(value: String?): LocalDateTime? {
+        return value?.let { LocalDateTime.parse(it, formatter) }
+    }
+
+    // Mengubah objek waktu Kotlin menjadi String agar bisa disimpan di DB
+    @TypeConverter
+    fun dateToTimestamp(date: LocalDateTime?): String? {
+        return date?.format(formatter)
+    }
+
+    // --- 🧬 FloatArray Converters (Untuk Biometric Embedding 128-d) ---
+    // Sangat krusial agar data wajah AI bisa disimpan dalam satu kolom
+    @TypeConverter
+    fun fromFloatArray(value: FloatArray?): String? {
+        return gson.toJson(value)
     }
 
     @TypeConverter
-    fun dateToTimestamp(date: LocalDateTime?): Long? {
-        return date?.atZone(ZoneId.systemDefault())?.toInstant()?.toEpochMilli()
+    fun toFloatArray(value: String?): FloatArray? {
+        val type = object : TypeToken<FloatArray>() {}.type
+        return gson.fromJson(value, type)
     }
 
-    // --- 👤 Data Wajah (FloatArray <-> String) ---
-    // Kita gunakan cara paling standar agar presisi Float tidak hilang
+    // --- 📦 List<String> Converters (Untuk Assigned Classes / Hak Akses) ---
+    // Digunakan pada UserEntity untuk menyimpan daftar kelas yang boleh diakses Admin
     @TypeConverter
-    fun fromString(value: String?): FloatArray? {
-        if (value.isNullOrEmpty()) return null
-        return try {
-            // Gunakan instance Gson baru di sini agar tidak ada state yang tertinggal
-            Gson().fromJson(value, FloatArray::class.java)
-        } catch (e: Exception) {
-            null
-        }
+    fun fromStringList(value: List<String>?): String? {
+        return gson.toJson(value)
     }
 
     @TypeConverter
-    fun fromFloatArray(array: FloatArray?): String? {
-        if (array == null) return null
-        return try {
-            Gson().toJson(array)
-        } catch (e: Exception) {
-            null
-        }
+    fun toStringList(value: String?): List<String>? {
+        val type = object : TypeToken<List<String>>() {}.type
+        return gson.fromJson(value, type)
     }
 }

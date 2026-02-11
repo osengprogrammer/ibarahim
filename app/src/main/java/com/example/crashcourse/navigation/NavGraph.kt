@@ -1,130 +1,173 @@
 package com.example.crashcourse.navigation
 
 import androidx.compose.runtime.Composable
-import androidx.navigation.NavController
-import androidx.navigation.NavGraphBuilder
+import androidx.navigation.NavHostController
 import androidx.navigation.NavType
+import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
-import com.example.crashcourse.ui.*
-import com.example.crashcourse.ui.checkin.CheckInRecordScreen
+
+// 🚀 CORE SCREENS
+import com.example.crashcourse.ui.MainScreen
+import com.example.crashcourse.ui.AdminDashboardScreen
+import com.example.crashcourse.ui.auth.LoginScreen
+import com.example.crashcourse.ui.auth.RegisterScreen
+import com.example.crashcourse.ui.auth.StatusWaitingScreen
+import com.example.crashcourse.ui.add.AddUserScreen
+import com.example.crashcourse.ui.add.RegistrationMenuScreen
+import com.example.crashcourse.ui.add.SingleUploadScreen
+import com.example.crashcourse.ui.add.BulkRegistrationScreen
 import com.example.crashcourse.ui.edit.EditUserScreen
+import com.example.crashcourse.ui.checkin.CheckInScreen
+import com.example.crashcourse.ui.options.OptionsManagementScreen
+import com.example.crashcourse.ui.options.MasterClassManagementScreen
+import com.example.crashcourse.ui.monitor.LiveMonitorScreen 
+import com.example.crashcourse.ui.management.UserManagementScreen
+import com.example.crashcourse.ui.face.FaceListScreen // ✅ IMPORT WAJIB
+
+// 🚀 VIEWMODELS & STATES
 import com.example.crashcourse.viewmodel.AuthState
-import com.example.crashcourse.viewmodel.AuthViewModel
 
-sealed class Screen(val route: String) {
-    object CheckIn           : Screen("check_in")
-    object RegistrationMenu  : Screen("registration_menu")
-    object AddUser           : Screen("add_user")
-    object BulkRegister      : Screen("bulk_register")
-    object Manage            : Screen("manage_faces")
-    object SingleUpload      : Screen("single_upload")
-    
-    object EditUser : Screen("edit_user/{studentId}") {
-        fun createRoute(studentId: String) = "edit_user/$studentId"
-    }
-
-    object Options           : Screen("options_management")
-    object CheckInRecord     : Screen("checkin_record")
-    object Settings          : Screen("settings")
-    object AdminDashboard    : Screen("admin_dashboard")
-    object UserManagement    : Screen("user_management")
-    
-    // 🚀 INI YANG HILANG DAN BIKIN ERROR:
-    object LiveMonitor       : Screen("live_monitor")
-    
-    // Tambahan untuk Edit Scope (User Management)
-    object EditUserScope : Screen("edit_user_scope/{userId}") {
-        fun createRoute(userId: String) = "edit_user_scope/$userId"
-    }
-}
-
-fun NavGraphBuilder.addAppManagementGraph(
-    navController: NavController,
-    authState: AuthState.Active,
-    authViewModel: AuthViewModel,
-    onLogout: () -> Unit
+/**
+ * 🗺️ Azura Tech Central NavGraph
+ * Menghubungkan semua rute (String) ke Layar (Composable).
+ */
+@Composable
+fun NavGraph(
+    navController: NavHostController, 
+    authState: AuthState
 ) {
-    val isAdmin = authState.role == "ADMIN"
-
-    // 1. Settings Screen
-    composable(Screen.Settings.route) {
-        SettingsScreen(
-            onLogout = onLogout,
-            onNavigateToMasterData = { navController.navigate(Screen.Options.route) },
-            onNavigateToUserMan = { navController.navigate(Screen.UserManagement.route) }
-        )
+    // Tentukan layar awal berdasarkan status login
+    val startDest = when (authState) {
+        is AuthState.Active -> Screen.Main.route
+        is AuthState.StatusWaiting -> Screen.StatusWaiting.route
+        else -> Screen.Login.route
     }
 
-    // 2. User Management
-    composable(Screen.UserManagement.route) {
-        if (isAdmin) {
-            UserManagementScreen(
-                onBack = { navController.popBackStack() },
-                onEditUser = { userId -> 
-                     navController.navigate(Screen.EditUserScope.createRoute(userId))
+    
+
+    NavHost(navController = navController, startDestination = startDest) {
+        
+        // ==========================================
+        // 🔐 1. AUTHENTICATION ROUTES
+        // ==========================================
+        composable(Screen.Login.route) {
+            LoginScreen(
+                onNavigateToRegister = { navController.navigate(Screen.Register.route) },
+                onLoginSuccess = { 
+                    navController.navigate(Screen.Main.route) {
+                        popUpTo(Screen.Login.route) { inclusive = true }
+                    }
                 }
             )
-        } else {
-            AccessDeniedScreen("Admin Only")
         }
-    }
-    
-    // 3. Edit User Scope (Assign Kelas)
-    composable(
-        route = Screen.EditUserScope.route,
-        arguments = listOf(navArgument("userId") { type = NavType.StringType })
-    ) { backStackEntry ->
-        if (isAdmin) {
-            val userId = backStackEntry.arguments?.getString("userId") ?: ""
-            // Pastikan EditUserScopeScreen sudah ada, atau gunakan placeholder sementara
-            EditUserScopeScreen(userId = userId, onBack = { navController.popBackStack() })
+        
+        composable(Screen.Register.route) {
+            RegisterScreen(
+                onNavigateToLogin = { navController.navigate(Screen.Login.route) }
+            )
         }
-    }
-
-    // 4. Master Data
-    composable(Screen.Options.route) {
-        if (isAdmin) {
-            OptionsManagementScreen() 
-        } else {
-            AccessDeniedScreen("Admin Only")
+        
+        composable(Screen.StatusWaiting.route) { 
+            StatusWaitingScreen() 
         }
-    }
 
-    // 5. Riwayat Absensi
-    composable(Screen.CheckInRecord.route) {
-        CheckInRecordScreen(authState = authState)
-    }
-
-    // 6. Face Management
-    composable(Screen.Manage.route) {
-        FaceListScreen(
-            authState = authState,
-            onEditUser = { student ->
-                navController.navigate(Screen.EditUser.createRoute(student.studentId))
+        // ==========================================
+        // 🏠 2. ACTIVE SESSION ROUTES (Hanya jika Login)
+        // ==========================================
+        if (authState is AuthState.Active) {
+            
+            composable(Screen.Main.route) {
+                MainScreen(
+                    authState = authState,
+                    onNavigateToCheckIn = { navController.navigate(Screen.CheckIn.route) },
+                    onNavigateToAdmin = { navController.navigate(Screen.Admin.route) }
+                )
             }
-        )
-    }
 
-    // 7. Edit Student Profile
-    composable(
-        route = Screen.EditUser.route,
-        arguments = listOf(navArgument("studentId") { type = NavType.StringType })
-    ) { backStackEntry ->
-        val studentId = backStackEntry.arguments?.getString("studentId") ?: ""
-        EditUserScreen(
-            studentId = studentId,
-            onNavigateBack = { navController.popBackStack() },
-            onUserUpdated = { navController.popBackStack() }
-        )
-    }
-    
-    // 8. Live Monitor Route
-    composable(Screen.LiveMonitor.route) {
-        if (isAdmin) {
-            LiveAttendanceScreen(onBack = { navController.popBackStack() })
-        } else {
-            AccessDeniedScreen("Admin Only")
+            composable(Screen.CheckIn.route) { 
+                CheckInScreen(useBackCamera = true) 
+            }
+            
+            composable(Screen.Admin.route) { 
+                AdminDashboardScreen(navController = navController) 
+            }
+            
+            composable(Screen.Options.route) { 
+                OptionsManagementScreen(onNavigateBack = { navController.popBackStack() }) 
+            }
+
+            composable(Screen.MasterClass.route) { 
+                MasterClassManagementScreen(onNavigateBack = { navController.popBackStack() }) 
+            }
+
+            composable(Screen.LiveMonitor.route) { 
+                LiveMonitorScreen(onBack = { navController.popBackStack() }) 
+            }
+
+            // 🚀 FACE MANAGEMENT (Rute yang tadi Error)
+            composable(Screen.FaceList.route) {
+                FaceListScreen(
+                    onNavigateBack = { navController.popBackStack() },
+                    onNavigateToEdit = { id -> 
+                        navController.navigate(Screen.EditUser.createRoute(id)) 
+                    }
+                )
+            }
+
+            // --- 📝 REGISTRATION FLOW ---
+            composable(Screen.RegistrationMenu.route) {
+                RegistrationMenuScreen(
+                    onNavigateToSingleAdd = { navController.navigate(Screen.Add.route) },
+                    onNavigateToBulk = { navController.navigate(Screen.Bulk.route) },
+                    onNavigateToGallery = { navController.navigate(Screen.SingleUpload.route) },
+                    onBack = { navController.popBackStack() }
+                )
+            }
+            
+            composable(Screen.Add.route) {
+                AddUserScreen(
+                    onNavigateBack = { navController.popBackStack() },
+                    onUpdateSuccess = { navController.popBackStack() } 
+                )
+            }
+
+            composable(Screen.Bulk.route) { 
+                BulkRegistrationScreen(onNavigateBack = { navController.popBackStack() }) 
+            }
+            
+            composable(Screen.SingleUpload.route) { 
+                SingleUploadScreen(
+                    onNavigateBack = { navController.popBackStack() }, 
+                    onUpdateSuccess = { navController.popBackStack() }
+                ) 
+            }
+
+            // --- 👥 USER MANAGEMENT ---
+            composable(Screen.UserManagement.route) {
+                UserManagementScreen(
+                    onBack = { navController.popBackStack() },
+                    onEditUser = { id -> navController.navigate(Screen.EditUser.createRoute(id)) }
+                )
+            }
+            
+            // --- ✏️ DYNAMIC EDIT SCREEN ---
+            composable(
+                route = Screen.EditUser.route,
+                arguments = listOf(
+                    navArgument("userId") { 
+                        type = NavType.StringType 
+                        nullable = false
+                    }
+                )
+            ) { backStackEntry ->
+                val userId = backStackEntry.arguments?.getString("userId") ?: ""
+                EditUserScreen(
+                    studentId = userId,
+                    onNavigateBack = { navController.popBackStack() },
+                    onUpdateSuccess = { navController.popBackStack() }
+                )
+            }
         }
     }
 }

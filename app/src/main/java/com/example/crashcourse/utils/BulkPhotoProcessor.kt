@@ -15,15 +15,15 @@ import java.io.FileInputStream
 import java.util.concurrent.TimeUnit
 
 /**
- * Utility class for processing photos from various sources during bulk registration
+ * 📸 Azura Tech Bulk Photo Processor
+ * Handles memory-safe downloading, decoding, and optimization of student photos.
  */
 object BulkPhotoProcessor {
     private const val TAG = "BulkPhotoProcessor"
     
     // Photo processing constants
-    private const val MAX_PHOTO_SIZE = 512 // pixels
-    private const val JPEG_QUALITY = 80 // compression quality for bulk processing
-    private const val MAX_FILE_SIZE = 500 * 1024 // 500KB max per photo
+    private const val MAX_PHOTO_SIZE = 512 // Optimal size for Face Recognition
+    private const val MAX_FILE_SIZE = 1024 * 1024 // 1MB limit for incoming streams
     private const val DOWNLOAD_TIMEOUT = 30L // seconds
     
     // HTTP client for downloading photos
@@ -44,7 +44,7 @@ object BulkPhotoProcessor {
     )
     
     /**
-     * Process photo from various sources (URL, local file, base64)
+     * 🚀 MAIN ENTRY: Process photo from various sources (URL, local file, base64)
      */
     suspend fun processPhotoSource(
         context: Context,
@@ -52,15 +52,11 @@ object BulkPhotoProcessor {
         studentId: String
     ): PhotoProcessResult {
         if (photoSource.isBlank()) {
-            return PhotoProcessResult(
-                success = true,
-                localPhotoUrl = null,
-                error = null
-            )
+            return PhotoProcessResult(success = true, localPhotoUrl = null)
         }
         
         return try {
-            Log.d(TAG, "Processing photo for $studentId: ${photoSource.take(100)}...")
+            Log.d(TAG, "Memproses foto untuk $studentId...")
             
             val bitmap = when {
                 photoSource.startsWith("http://") || photoSource.startsWith("https://") -> {
@@ -69,224 +65,144 @@ object BulkPhotoProcessor {
                 photoSource.startsWith("data:image") -> {
                     decodeBase64Photo(photoSource)
                 }
-                photoSource.startsWith("file://") -> {
-                    loadLocalPhoto(photoSource.removePrefix("file://"))
-                }
                 else -> {
-                    // Try as local file path
-                    loadLocalPhoto(photoSource)
+                    // Try as local file path or file://
+                    val cleanPath = photoSource.removePrefix("file://")
+                    loadLocalPhoto(cleanPath)
                 }
             }
             
             if (bitmap == null) {
                 return PhotoProcessResult(
                     success = false,
-                    error = "Failed to load image from source"
+                    error = "Gagal memuat gambar dari sumber (URL/File tidak valid)"
                 )
             }
             
-            // Optimize the bitmap
+            // 1. Optimize (Resize to 512px max for AI efficiency)
             val optimizedBitmap = optimizePhoto(bitmap)
             
-            // Save using existing PhotoStorageUtils
+            // 2. Save to local storage using your utility
             val savedPhotoUrl = PhotoStorageUtils.saveFacePhoto(context, optimizedBitmap, studentId)
+            
+            // 3. Clean up bitmap memory immediately
+            if (optimizedBitmap != bitmap) bitmap.recycle()
             
             if (savedPhotoUrl != null) {
                 val savedFile = File(savedPhotoUrl)
-                Log.d(TAG, "Photo processed successfully for $studentId: ${savedFile.length()} bytes")
-                
                 PhotoProcessResult(
                     success = true,
                     localPhotoUrl = savedPhotoUrl,
                     processedSize = savedFile.length()
                 )
             } else {
-                PhotoProcessResult(
-                    success = false,
-                    error = "Failed to save processed photo"
-                )
+                PhotoProcessResult(success = false, error = "Gagal menyimpan foto ke storage.")
             }
             
         } catch (e: Exception) {
             Log.e(TAG, "Error processing photo for $studentId", e)
-            PhotoProcessResult(
-                success = false,
-                error = "Processing failed: ${e.message}"
-            )
+            PhotoProcessResult(success = false, error = "System Error: ${e.message}")
         }
     }
     
     /**
-     * Download photo from HTTP/HTTPS URL
+     * 🛡️ DOWNLOAD LOGIC: Includes headers and memory-safe decoding
      */
     private suspend fun downloadPhotoFromUrl(url: String): Bitmap? {
         return withContext(Dispatchers.IO) {
             try {
-                Log.d(TAG, "Downloading photo from: $url")
-                
                 val request = Request.Builder()
                     .url(url)
-                    .addHeader("User-Agent", "AzuraApp/1.0")
+                    // Standard headers to bypass basic anti-bot filters
+                    .addHeader("User-Agent", "Mozilla/5.0 (Android 13; Mobile)")
+                    .addHeader("Accept", "image/webp,image/apng,image/*")
                     .build()
                 
                 httpClient.newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) {
-                        Log.e(TAG, "Download failed with code: ${response.code}")
-                        return@withContext null
+                    if (!response.isSuccessful) return@withContext null
+                    
+                    val bytes = response.body?.bytes() ?: return@withContext null
+                    
+                    // 🧠 MEMORY SAFETY: Read dimensions only first
+                    val options = BitmapFactory.Options().apply {
+                        inJustDecodeBounds = true
+                    }
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+                    
+                    // Auto-Downsample if the image is massive (e.g., 4K photo from Google Drive)
+                    if (options.outWidth > 2000 || options.outHeight > 2000) {
+                        options.inSampleSize = 2
                     }
                     
-                    val contentLength = response.body?.contentLength() ?: 0
-                    if (contentLength > MAX_FILE_SIZE * 2) { // Allow larger downloads, we'll compress
-                        Log.w(TAG, "Downloaded file is large: $contentLength bytes")
-                    }
-                    
-                    response.body?.byteStream()?.use { inputStream ->
-                        BitmapFactory.decodeStream(inputStream)
-                    }
+                    options.inJustDecodeBounds = false
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to download photo from $url", e)
+                Log.e(TAG, "Gagal download: $url", e)
                 null
             }
         }
     }
     
-    /**
-     * Decode base64 encoded photo
-     */
     private fun decodeBase64Photo(dataUrl: String): Bitmap? {
         return try {
-            Log.d(TAG, "Decoding base64 photo...")
-            
-            // Extract base64 data from data URL
-            val base64Data = if (dataUrl.contains(",")) {
-                dataUrl.substringAfter(",")
-            } else {
-                dataUrl
-            }
-            
+            val base64Data = if (dataUrl.contains(",")) dataUrl.substringAfter(",") else dataUrl
             val decodedBytes = Base64.decode(base64Data, Base64.DEFAULT)
             BitmapFactory.decodeByteArray(decodedBytes, 0, decodedBytes.size)
-            
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to decode base64 photo", e)
-            null
-        }
+        } catch (e: Exception) { null }
     }
     
-    /**
-     * Load photo from local file path
-     */
     private fun loadLocalPhoto(filePath: String): Bitmap? {
         return try {
-            Log.d(TAG, "Loading local photo: $filePath")
-            
             val file = File(filePath)
-            if (!file.exists()) {
-                Log.e(TAG, "Local photo file does not exist: $filePath")
-                return null
-            }
-            
-            if (file.length() > MAX_FILE_SIZE * 2) {
-                Log.w(TAG, "Local photo file is large: ${file.length()} bytes")
-            }
-            
+            if (!file.exists()) return null
             FileInputStream(file).use { inputStream ->
                 BitmapFactory.decodeStream(inputStream)
             }
-            
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to load local photo: $filePath", e)
-            null
-        }
+        } catch (e: Exception) { null }
     }
     
     /**
-     * Optimize photo for face recognition and storage
+     * 📏 OPTIMIZATION: Keeps aspect ratio while capping at MAX_PHOTO_SIZE
      */
     private fun optimizePhoto(bitmap: Bitmap): Bitmap {
-        try {
-            // Calculate optimal size
-            val maxDimension = MAX_PHOTO_SIZE
-            val width = bitmap.width
-            val height = bitmap.height
-            
-            if (width <= maxDimension && height <= maxDimension) {
-                // Already optimal size
-                return bitmap
-            }
-            
-            // Calculate new dimensions maintaining aspect ratio
-            val ratio = minOf(
-                maxDimension.toFloat() / width,
-                maxDimension.toFloat() / height
-            )
-            
-            val newWidth = (width * ratio).toInt()
-            val newHeight = (height * ratio).toInt()
-            
-            Log.d(TAG, "Resizing photo from ${width}x${height} to ${newWidth}x${newHeight}")
-            
-            return bitmap.scale(newWidth, newHeight)
-            
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to optimize photo, using original", e)
-            return bitmap
-        }
+        val width = bitmap.width
+        val height = bitmap.height
+        
+        if (width <= MAX_PHOTO_SIZE && height <= MAX_PHOTO_SIZE) return bitmap
+        
+        val ratio = minOf(
+            MAX_PHOTO_SIZE.toFloat() / width,
+            MAX_PHOTO_SIZE.toFloat() / height
+        )
+        
+        val newWidth = (width * ratio).toInt()
+        val newHeight = (height * ratio).toInt()
+        
+        return bitmap.scale(newWidth, newHeight)
     }
     
     /**
-     * Validate photo quality for face recognition
-     */
-    fun validatePhotoQuality(bitmap: Bitmap): List<String> {
-        val issues = mutableListOf<String>()
-        
-        // Size validation
-        if (bitmap.width < 160 || bitmap.height < 160) {
-            issues.add("Photo too small (minimum 160x160 pixels)")
-        }
-        
-        if (bitmap.width > 2048 || bitmap.height > 2048) {
-            issues.add("Photo very large (will be resized)")
-        }
-        
-        // Aspect ratio validation
-        val aspectRatio = bitmap.width.toFloat() / bitmap.height.toFloat()
-        if (aspectRatio < 0.5f || aspectRatio > 2.0f) {
-            issues.add("Unusual aspect ratio (may affect face detection)")
-        }
-        
-        return issues
-    }
-    
-    /**
-     * Get photo source type for logging/debugging
-     */
-    fun getPhotoSourceType(photoSource: String): String {
-        return when {
-            photoSource.isBlank() -> "None"
-            photoSource.startsWith("http://") || photoSource.startsWith("https://") -> "HTTP URL"
-            photoSource.startsWith("data:image") -> "Base64 Data"
-            photoSource.startsWith("file://") -> "File URL"
-            else -> "Local Path"
-        }
-    }
-    
-    /**
-     * Estimate processing time based on photo source
+     * ⏱️ ESTIMATOR: Predicts total processing time for the Admin UI
      */
     fun estimateProcessingTime(photoSources: List<String>): Long {
         var totalSeconds = 0L
-        
         photoSources.forEach { source ->
             totalSeconds += when {
                 source.isBlank() -> 0
-                source.startsWith("http") -> 3 // Download + process
-                source.startsWith("data:") -> 1 // Decode + process
-                else -> 1 // Load + process
+                source.startsWith("http") -> 3 // Assume 3s for download + AI processing
+                else -> 1 // Assume 1s for local processing
             }
         }
-        
         return totalSeconds
+    }
+
+    fun getPhotoSourceType(photoSource: String): String {
+        return when {
+            photoSource.isBlank() -> "None"
+            photoSource.startsWith("http") -> "Cloud URL"
+            photoSource.startsWith("data:image") -> "Base64"
+            else -> "Local Storage"
+        }
     }
 }

@@ -1,72 +1,102 @@
 package com.example.crashcourse.viewmodel
 
 import android.app.Application
+import android.content.Context
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.crashcourse.db.AppDatabase
 import com.example.crashcourse.db.FaceCache
-import com.example.crashcourse.utils.FirestoreHelper
+import com.example.crashcourse.firestore.student.FirestoreStudent // ✅ NEW IMPORT
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
+/**
+ * 📦 Azura Tech Sync State
+ * Mengelola status UI selama proses sinkronisasi.
+ */
+sealed class SyncState {
+    object Idle : SyncState()
+    data class Loading(val message: String, val progress: Float = 0f) : SyncState()
+    data class Success(val message: String) : SyncState()
+    data class Error(val message: String) : SyncState()
+}
+
 class SyncViewModel(application: Application) : AndroidViewModel(application) {
-    private val faceDao = AppDatabase.getInstance(application).faceDao()
+    
+    private val database = AppDatabase.getInstance(application)
+    private val faceDao = database.faceDao()
+    private val userDao = database.userDao()
     
     private val _syncState = MutableStateFlow<SyncState>(SyncState.Idle)
     val syncState = _syncState.asStateFlow()
 
-    /**
-     * 🔥 UPDATED: Sync Down with Teacher Scope
-     * Mengunduh data siswa dari Cloud ke HP, disaring berdasarkan hak akses guru.
-     */
-    fun syncStudentsDown(uid: String) {
-        viewModelScope.launch(Dispatchers.IO) {
-            // 1. Validasi UID
-            if (uid.isBlank()) {
-                _syncState.value = SyncState.Error("User ID tidak valid. Silakan login ulang.")
-                return@launch
-            }
+    // Key untuk menyimpan waktu sync terakhir di SharedPreferences
+    private val prefs = application.getSharedPreferences("azura_sync_prefs", Context.MODE_PRIVATE)
 
-            _syncState.value = SyncState.Loading("Mengecek data kelas Anda...")
+    /**
+     * 🔥 SMART SYNC DOWN
+     * Menarik data dari Cloud dengan 3 filter penghemat data.
+     */
+    fun syncStudentsDown(forceFullSync: Boolean = false) {
+        viewModelScope.launch(Dispatchers.IO) {
+            _syncState.value = SyncState.Loading("Mengidentifikasi Sesi...", 0.1f)
 
             try {
-                // 2. Download dari Firestore (Auto Scope: Admin ambil semua, Guru ambil kelasnya saja)
-                val cloudStudents = FirestoreHelper.getScopedStudentsFromFirestore(uid)
-                
-                if (cloudStudents.isEmpty()) {
-                    // Kita anggap Sukses tapi kosong, agar user tidak panik dikira error
-                    _syncState.value = SyncState.Success("Data tersinkronisasi (Tidak ada murid ditemukan).")
+                // 1. Ambil Profil User Lokal
+                val currentUser = userDao.getCurrentUser()
+                if (currentUser == null) {
+                    _syncState.value = SyncState.Error("Sesi tidak ditemukan. Silakan login ulang.")
                     return@launch
                 }
 
-                _syncState.value = SyncState.Loading("Menyimpan ${cloudStudents.size} data murid...")
+                // 2. Tentukan Timestamp Sinkronisasi Terakhir
+                val lastSyncTimestamp = if (forceFullSync) 0L else prefs.getLong("last_sync_${currentUser.sekolahId}", 0L)
+                
+                _syncState.value = SyncState.Loading("Menghubungkan ke Cloud...", 0.3f)
 
-                // 3. 🚀 OPTIMASI: Batch Insert
-                // Menggunakan insertAll jauh lebih cepat daripada looping satu per satu
+                // 3. Download dari Firestore via FirestoreStudent (✅ UPDATED)
+                val cloudStudents = FirestoreStudent.fetchSmartSyncStudents(
+                    sekolahId = currentUser.sekolahId ?: "",
+                    assignedClasses = currentUser.assignedClasses,
+                    role = currentUser.role,
+                    lastSync = lastSyncTimestamp
+                )
+                
+                if (cloudStudents.isEmpty()) {
+                    _syncState.value = SyncState.Success("Data sudah up-to-date.")
+                    return@launch
+                }
+
+                _syncState.value = SyncState.Loading("Menyimpan ${cloudStudents.size} data baru...", 0.7f)
+
+                // 4. Batch Insert (Upsert) ke Database Lokal
                 faceDao.insertAll(cloudStudents)
 
-                // 4. Refresh Cache Wajah (Penting untuk C++ Engine)
-                // Pastikan ini berjalan agar murid yang baru didownload langsung bisa dikenali
+                // 5. Simpan Timestamp Sekarang sebagai LastSync Terakhir
+                val currentTimestamp = System.currentTimeMillis()
+                prefs.edit().putLong("last_sync_${currentUser.sekolahId}", currentTimestamp).apply()
+
+                // 6. Refresh Cache Wajah untuk Engine AI
                 FaceCache.refresh(getApplication())
 
-                _syncState.value = SyncState.Success("Selesai! ${cloudStudents.size} murid berhasil didownload.")
+                _syncState.value = SyncState.Success("Berhasil sinkron ${cloudStudents.size} data.")
+                
             } catch (e: Exception) {
-                _syncState.value = SyncState.Error("Gagal Sync: ${e.message}")
+                Log.e("SyncViewModel", "Smart Sync Failed", e)
+                _syncState.value = SyncState.Error("Gagal: ${e.message}")
             }
         }
     }
     
+    fun clearSyncHistory(sekolahId: String) {
+        prefs.edit().remove("last_sync_$sekolahId").apply()
+        _syncState.value = SyncState.Idle
+    }
+
     fun resetState() {
         _syncState.value = SyncState.Idle
     }
-}
-
-// State Management untuk UI (Loading/Success/Error)
-sealed class SyncState {
-    object Idle : SyncState()
-    data class Loading(val message: String) : SyncState()
-    data class Success(val message: String) : SyncState()
-    data class Error(val message: String) : SyncState()
 }

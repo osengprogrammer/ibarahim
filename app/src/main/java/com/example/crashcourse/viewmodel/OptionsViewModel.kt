@@ -5,205 +5,117 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.crashcourse.db.*
-import com.example.crashcourse.ui.OptionsHelpers
-import com.example.crashcourse.utils.Constants // 🚀 Import Constants
-import com.example.crashcourse.utils.FirestoreHelper
+import com.example.crashcourse.firestore.options.FirestoreOptions // ✅ NEW IMPORT
+import com.example.crashcourse.utils.Constants
 import com.google.firebase.firestore.ListenerRegistration
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
+/**
+ * 🏛️ Azura Tech Options ViewModel
+ * Menangani Sinkronisasi Master Data 6-Pilar antara Firestore dan Database Lokal.
+ */
 class OptionsViewModel(application: Application) : AndroidViewModel(application) {
 
     private val db = AppDatabase.getInstance(application)
-    
-    // --- 1. LOCAL DATA FLOWS (Offline First) ---
-    val classOptions: StateFlow<List<ClassOption>> = db.classOptionDao().getAllOptions()
+
+    // Tracking listeners untuk dibersihkan saat ViewModel hancur
+    private val listeners = mutableListOf<ListenerRegistration>()
+
+    // --- 📊 LOCAL DATA FLOWS (Room) ---
+    val gradeOptions = db.gradeOptionDao().getAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val subClassOptions: StateFlow<List<SubClassOption>> = db.subClassOptionDao().getAllOptions()
+    val programOptions = db.programOptionDao().getAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val gradeOptions: StateFlow<List<GradeOption>> = db.gradeOptionDao().getAllOptions()
+    val subClassOptions = db.subClassOptionDao().getAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val subGradeOptions: StateFlow<List<SubGradeOption>> = db.subGradeOptionDao().getAllOptions()
+    val classOptions = db.classOptionDao().getAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val programOptions: StateFlow<List<ProgramOption>> = db.programOptionDao().getAllOptions()
+    val subGradeOptions = db.subGradeOptionDao().getAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val roleOptions: StateFlow<List<RoleOption>> = db.roleOptionDao().getAllOptions()
+    val roleOptions = db.roleOptionDao().getAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    // --- 2. SYNC STATE ---
+    // --- 🔄 SYNC STATE ---
     private val _isSyncing = MutableStateFlow(false)
     val isSyncing: StateFlow<Boolean> = _isSyncing
-
-    private val listeners = mutableListOf<ListenerRegistration>()
 
     init {
         startRealtimeSync()
     }
 
-    // --- 3. MANUAL PULL ENGINE (Cloud -> Local) ---
+    // --- 🚀 CLOUD ACTIONS ---
+
+    /**
+     * Trigger manual untuk mengunduh ulang semua Master Data.
+     */
     fun syncAllFromCloud() {
         viewModelScope.launch(Dispatchers.IO) {
             _isSyncing.value = true
-            Log.d("OptionsVM", "📥 Memulai Pull Data dari Cloud...")
-            
             try {
-                // List kategori ini digunakan untuk looping logic, bukan nama koleksi DB
-                val categories = listOf("Class", "SubClass", "Grade", "SubGrade", "Program", "Role")
-                
-                categories.forEach { type ->
-                    val collection = getCollectionName(type) // Mengambil nama koleksi dari Constants via fungsi helper
-                    val cloudData = FirestoreHelper.fetchOptionsOnce(collection)
-                    
+                val types = listOf("Class", "SubClass", "Grade", "SubGrade", "Program", "Role")
+                types.forEach { type ->
+                    val collectionName = getCollectionName(type)
+                    // ✅ UPDATED: Use FirestoreOptions
+                    val cloudData = FirestoreOptions.fetchOptionsOnce(collectionName)
                     if (cloudData.isNotEmpty()) {
-                        when (type) {
-                            "Class" -> db.classOptionDao().insertAll(cloudData.map { map -> 
-                                ClassOption(
-                                    id = map["id"].toString().toInt(), 
-                                    name = map["name"].toString(), 
-                                    displayOrder = map["order"].toString().toIntOrNull() ?: 0
-                                ) 
-                            })
-                            "SubClass" -> db.subClassOptionDao().insertAll(cloudData.map { map -> 
-                                SubClassOption(
-                                    id = map["id"].toString().toInt(), 
-                                    name = map["name"].toString(), 
-                                    parentClassId = map["parentId"].toString().toIntOrNull() ?: 0, 
-                                    displayOrder = map["order"].toString().toIntOrNull() ?: 0
-                                ) 
-                            })
-                            "Grade" -> db.gradeOptionDao().insertAll(cloudData.map { map -> 
-                                GradeOption(
-                                    id = map["id"].toString().toInt(), 
-                                    name = map["name"].toString(), 
-                                    displayOrder = map["order"].toString().toIntOrNull() ?: 0
-                                ) 
-                            })
-                            "SubGrade" -> db.subGradeOptionDao().insertAll(cloudData.map { map -> 
-                                SubGradeOption(
-                                    id = map["id"].toString().toInt(), 
-                                    name = map["name"].toString(), 
-                                    parentGradeId = map["parentId"].toString().toIntOrNull() ?: 0, 
-                                    displayOrder = map["order"].toString().toIntOrNull() ?: 0
-                                ) 
-                            })
-                            "Program" -> db.programOptionDao().insertAll(cloudData.map { map -> 
-                                ProgramOption(
-                                    id = map["id"].toString().toInt(), 
-                                    name = map["name"].toString(), 
-                                    displayOrder = map["order"].toString().toIntOrNull() ?: 0
-                                ) 
-                            })
-                            "Role" -> db.roleOptionDao().insertAll(cloudData.map { map -> 
-                                RoleOption(
-                                    id = map["id"].toString().toInt(), 
-                                    name = map["name"].toString(), 
-                                    displayOrder = map["order"].toString().toIntOrNull() ?: 0
-                                ) 
-                            })
-                        }
+                        processCloudData(type, cloudData)
                     }
                 }
-                Log.d("OptionsVM", "✅ Pull Data Selesai")
+                Log.d("OptionsVM", "✅ Manual Sync Complete")
             } catch (e: Exception) {
-                Log.e("OptionsVM", "❌ Gagal Pull Data: ${e.message}")
+                Log.e("OptionsVM", "❌ Manual Sync Failed: ${e.message}")
             } finally {
                 _isSyncing.value = false
             }
         }
     }
 
-    // --- 4. REALTIME SYNC ENGINE ---
-    private fun startRealtimeSync() {
-        Log.d("OptionsVM", "🚀 Memulai Realtime Sync Master Data...")
-
-        // 🚀 MENGGUNAKAN CONSTANTS
-        listeners.add(FirestoreHelper.listenToOptions(Constants.COLL_OPT_CLASSES) { list ->
-            viewModelScope.launch(Dispatchers.IO) {
-                db.classOptionDao().insertAll(list.map { map -> 
-                    ClassOption(map["id"].toString().toInt(), map["name"].toString(), map["order"].toString().toIntOrNull() ?: 0) 
-                })
-            }
-        })
-
-        listeners.add(FirestoreHelper.listenToOptions(Constants.COLL_OPT_SUBCLASSES) { list ->
-            viewModelScope.launch(Dispatchers.IO) {
-                db.subClassOptionDao().insertAll(list.map { map -> 
-                    SubClassOption(map["id"].toString().toInt(), map["name"].toString(), map["parentId"].toString().toIntOrNull() ?: 0, map["order"].toString().toIntOrNull() ?: 0) 
-                })
-            }
-        })
-
-        listeners.add(FirestoreHelper.listenToOptions(Constants.COLL_OPT_GRADES) { list ->
-            viewModelScope.launch(Dispatchers.IO) {
-                db.gradeOptionDao().insertAll(list.map { map -> 
-                    GradeOption(map["id"].toString().toInt(), map["name"].toString(), map["order"].toString().toIntOrNull() ?: 0) 
-                })
-            }
-        })
-
-        listeners.add(FirestoreHelper.listenToOptions(Constants.COLL_OPT_SUBGRADES) { list ->
-            viewModelScope.launch(Dispatchers.IO) {
-                db.subGradeOptionDao().insertAll(list.map { map -> 
-                    SubGradeOption(map["id"].toString().toInt(), map["name"].toString(), map["parentId"].toString().toIntOrNull() ?: 0, map["order"].toString().toIntOrNull() ?: 0) 
-                })
-            }
-        })
-
-        listeners.add(FirestoreHelper.listenToOptions(Constants.COLL_OPT_PROGRAMS) { list ->
-            viewModelScope.launch(Dispatchers.IO) {
-                db.programOptionDao().insertAll(list.map { map -> 
-                    ProgramOption(map["id"].toString().toInt(), map["name"].toString(), map["order"].toString().toIntOrNull() ?: 0) 
-                })
-            }
-        })
-
-        listeners.add(FirestoreHelper.listenToOptions(Constants.COLL_OPT_ROLES) { list ->
-            viewModelScope.launch(Dispatchers.IO) {
-                db.roleOptionDao().insertAll(list.map { map -> 
-                    RoleOption(map["id"].toString().toInt(), map["name"].toString(), map["order"].toString().toIntOrNull() ?: 0) 
-                })
-            }
-        })
-    }
-
-    // --- 5. CRUD ACTIONS ---
-    
     fun addOption(type: String, name: String, order: Int, parentId: Int? = null) {
-        val collection = getCollectionName(type)
+        val collectionName = getCollectionName(type)
         val newId = (System.currentTimeMillis() % Int.MAX_VALUE).toInt()
-        val data = hashMapOf("id" to newId, "name" to name, "order" to order, "parentId" to (parentId ?: 0))
-
+        val data = hashMapOf(
+            "id" to newId,
+            "name" to name,
+            "order" to order,
+            "parentId" to (parentId ?: 0)
+        )
         viewModelScope.launch(Dispatchers.IO) {
-            FirestoreHelper.saveOptionToFirestore(collection, newId, data)
+            // ✅ UPDATED: Use FirestoreOptions
+            FirestoreOptions.saveOption(collectionName, newId, data)
         }
     }
 
     fun updateOption(type: String, option: Any, name: String, order: Int, parentId: Int? = null) {
-        val collection = getCollectionName(type)
-        val id = OptionsHelpers.getId(option)
-        val data = hashMapOf("id" to id, "name" to name, "order" to order, "parentId" to (parentId ?: 0))
-
+        val collectionName = getCollectionName(type)
+        val id = getOptionId(option)
+        val data = hashMapOf(
+            "id" to id,
+            "name" to name,
+            "order" to order,
+            "parentId" to (parentId ?: 0)
+        )
         viewModelScope.launch(Dispatchers.IO) {
-            FirestoreHelper.saveOptionToFirestore(collection, id, data)
+            // ✅ UPDATED: Use FirestoreOptions
+            FirestoreOptions.saveOption(collectionName, id, data)
         }
     }
 
     fun deleteOption(type: String, option: Any) {
-        val collection = getCollectionName(type)
-        val id = OptionsHelpers.getId(option)
-        
+        val collectionName = getCollectionName(type)
+        val id = getOptionId(option)
         viewModelScope.launch(Dispatchers.IO) {
-            FirestoreHelper.deleteOptionFromFirestore(collection, id)
             try {
+                // ✅ UPDATED: Use FirestoreOptions
+                FirestoreOptions.deleteOption(collectionName, id)
+                
+                // Hapus lokal secara optimis
                 when (option) {
                     is ClassOption -> db.classOptionDao().delete(option)
                     is SubClassOption -> db.subClassOptionDao().delete(option)
@@ -213,27 +125,84 @@ class OptionsViewModel(application: Application) : AndroidViewModel(application)
                     is RoleOption -> db.roleOptionDao().delete(option)
                 }
             } catch (e: Exception) {
-                Log.e("OptionsVM", "Gagal delete lokal: ${e.message}")
+                Log.e("OptionsVM", "❌ Delete Failed: ${e.message}")
             }
         }
     }
 
-    private fun getCollectionName(type: String): String {
-        // 🚀 MENGGUNAKAN CONSTANTS
-        return when(type) {
-            "Class" -> Constants.COLL_OPT_CLASSES
-            "SubClass" -> Constants.COLL_OPT_SUBCLASSES
-            "Grade" -> Constants.COLL_OPT_GRADES
-            "SubGrade" -> Constants.COLL_OPT_SUBGRADES
-            "Program" -> Constants.COLL_OPT_PROGRAMS
-            "Role" -> Constants.COLL_OPT_ROLES
-            else -> Constants.COLL_OPT_OTHERS
+    // --- 🛠️ SYNC ENGINE ---
+
+    private fun startRealtimeSync() {
+        val syncMap = mapOf(
+            Constants.COLL_OPT_CLASSES to "Class",
+            Constants.COLL_OPT_SUBCLASSES to "SubClass",
+            Constants.COLL_OPT_GRADES to "Grade",
+            Constants.COLL_OPT_SUBGRADES to "SubGrade",
+            Constants.COLL_OPT_PROGRAMS to "Program",
+            Constants.COLL_OPT_ROLES to "Role"
+        )
+
+        syncMap.forEach { (coll, type) ->
+            // ✅ UPDATED: Use FirestoreOptions
+            listeners.add(FirestoreOptions.listenToOptions(coll) { list: List<Map<String, Any>> ->
+                viewModelScope.launch(Dispatchers.IO) {
+                    processCloudData(type, list)
+                }
+            })
         }
+    }
+
+    private suspend fun processCloudData(type: String, dataList: List<Map<String, Any>>) {
+        try {
+            when (type) {
+                "Class" -> db.classOptionDao().insertAll(dataList.map {
+                    ClassOption(it["id"].toString().toIntOrNull() ?: 0, it["name"].toString(), it["order"].toString().toIntOrNull() ?: 0)
+                })
+                "SubClass" -> db.subClassOptionDao().insertAll(dataList.map {
+                    SubClassOption(it["id"].toString().toIntOrNull() ?: 0, it["name"].toString(), it["parentId"].toString().toIntOrNull() ?: 0, it["order"].toString().toIntOrNull() ?: 0)
+                })
+                "Grade" -> db.gradeOptionDao().insertAll(dataList.map {
+                    GradeOption(it["id"].toString().toIntOrNull() ?: 0, it["name"].toString(), it["order"].toString().toIntOrNull() ?: 0)
+                })
+                "SubGrade" -> db.subGradeOptionDao().insertAll(dataList.map {
+                    SubGradeOption(it["id"].toString().toIntOrNull() ?: 0, it["name"].toString(), it["parentId"].toString().toIntOrNull() ?: 0, it["order"].toString().toIntOrNull() ?: 0)
+                })
+                "Program" -> db.programOptionDao().insertAll(dataList.map {
+                    ProgramOption(it["id"].toString().toIntOrNull() ?: 0, it["name"].toString(), it["order"].toString().toIntOrNull() ?: 0)
+                })
+                "Role" -> db.roleOptionDao().insertAll(dataList.map {
+                    RoleOption(it["id"].toString().toIntOrNull() ?: 0, it["name"].toString(), it["order"].toString().toIntOrNull() ?: 0)
+                })
+            }
+        } catch (e: Exception) {
+            Log.e("OptionsVM", "Error processing cloud data: ${e.message}")
+        }
+    }
+
+    // --- ⚙️ HELPERS ---
+
+    private fun getCollectionName(type: String): String = when(type) {
+        "Class" -> Constants.COLL_OPT_CLASSES
+        "SubClass" -> Constants.COLL_OPT_SUBCLASSES
+        "Grade" -> Constants.COLL_OPT_GRADES
+        "SubGrade" -> Constants.COLL_OPT_SUBGRADES
+        "Program" -> Constants.COLL_OPT_PROGRAMS
+        "Role" -> Constants.COLL_OPT_ROLES
+        else -> "others"
+    }
+
+    private fun getOptionId(option: Any): Int = when (option) {
+        is ClassOption -> option.id
+        is SubClassOption -> option.id
+        is GradeOption -> option.id
+        is SubGradeOption -> option.id
+        is ProgramOption -> option.id
+        is RoleOption -> option.id
+        else -> 0
     }
 
     override fun onCleared() {
         super.onCleared()
         listeners.forEach { it.remove() }
-        Log.d("OptionsVM", "🛑 Sync Stopped")
     }
 }

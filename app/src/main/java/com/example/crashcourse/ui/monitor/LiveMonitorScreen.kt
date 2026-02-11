@@ -1,4 +1,4 @@
-package com.example.crashcourse.ui
+package com.example.crashcourse.ui.monitor // ✅ Package sudah benar
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -26,11 +26,12 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.crashcourse.viewmodel.DashboardViewModel
-import com.example.crashcourse.viewmodel.LiveLog
+// ✅ FIX IMPORT: Mengambil LiveLog dari lokasi yang benar
+import com.example.crashcourse.firestore.dashboard.LiveLog 
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun LiveAttendanceScreen(
+fun LiveMonitorScreen(
     onBack: () -> Unit,
     viewModel: DashboardViewModel = viewModel()
 ) {
@@ -53,7 +54,7 @@ fun LiveAttendanceScreen(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant, // Warna TopBar lebih soft
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant, 
                     titleContentColor = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             )
@@ -65,7 +66,7 @@ fun LiveAttendanceScreen(
                 .fillMaxSize()
                 .padding(16.dp)
         ) {
-            // 1. CHART SECTION
+            // 1. CHART SECTION (Pie Chart Keren)
             Card(
                 modifier = Modifier.fillMaxWidth().height(220.dp),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),

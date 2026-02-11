@@ -3,15 +3,15 @@ package com.example.crashcourse.viewmodel
 import android.content.Context
 import android.graphics.BitmapFactory
 import android.net.Uri
-import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.crashcourse.db.AppDatabase
 import com.example.crashcourse.db.FaceCache
+import com.example.crashcourse.db.FaceDao
 import com.example.crashcourse.db.FaceEntity
+import com.example.crashcourse.firestore.student.FirestoreStudent // ✅ NEW IMPORT
 import com.example.crashcourse.utils.BulkPhotoProcessor
 import com.example.crashcourse.utils.CsvImportUtils
-import com.example.crashcourse.utils.FirestoreHelper
 import com.example.crashcourse.utils.NativeMath
 import com.example.crashcourse.utils.PhotoProcessingUtils
 import com.example.crashcourse.utils.PhotoStorageUtils
@@ -23,10 +23,14 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-// Data class tetap sama
+/**
+ * 📊 Azura Tech Register ViewModel
+ * Handles bulk student registration via CSV with automated photo processing
+ * and AI-based visual duplicate detection.
+ */
 data class ProcessingState(
     val isProcessing: Boolean = false,
-    val status: String = "Waiting for CSV...",
+    val status: String = "Menunggu CSV...",
     val progress: Float = 0f,
     val estimatedTime: String = "",
     val results: List<ProcessResult> = emptyList(),
@@ -41,134 +45,107 @@ class RegisterViewModel : ViewModel() {
     private val _state = MutableStateFlow(ProcessingState())
     val state: StateFlow<ProcessingState> = _state.asStateFlow()
 
+    /**
+     * Estimates processing time based on the photo sources in the CSV.
+     */
     fun prepareProcessing(context: Context, uri: Uri) {
         viewModelScope.launch {
-            // 🚀 Pindah ke IO agar tidak nge-lag saat baca file
             withContext(Dispatchers.IO) {
                 try {
                     val csvResult = CsvImportUtils.parseCsvFile(context, uri)
                     val photoSources = csvResult.students.map { it.photoUrl }
-
                     val seconds = BulkPhotoProcessor.estimateProcessingTime(photoSources)
                     val estimate = when {
-                        seconds > 120 -> "${seconds / 60} minutes"
-                        seconds > 60 -> "1 minute ${seconds % 60} seconds"
-                        else -> "$seconds seconds"
+                        seconds > 120 -> "${seconds / 60} menit"
+                        seconds > 60 -> "1 menit ${seconds % 60} detik"
+                        else -> "$seconds detik"
                     }
-
-                    _state.value = _state.value.copy(
-                        estimatedTime = "Estimated time: $estimate"
-                    )
+                    _state.value = _state.value.copy(estimatedTime = "Estimasi waktu: $estimate")
                 } catch (e: Exception) {
-                    _state.value = _state.value.copy(
-                        estimatedTime = "Time estimate unavailable"
-                    )
+                    _state.value = _state.value.copy(estimatedTime = "Estimasi tidak tersedia")
                 }
             }
         }
     }
 
+    /**
+     * 🚀 MAIN BULK PROCESSOR
+     * Orchestrates CSV parsing, photo downloading, and biometric syncing.
+     */
     fun processCsvFile(context: Context, uri: Uri) {
         viewModelScope.launch {
             _state.value = ProcessingState(
                 isProcessing = true,
-                status = "Initializing...",
+                status = "Inisialisasi...",
                 estimatedTime = state.value.estimatedTime
             )
 
-            // 🚀 OPERASI BERAT PINDAH KE BACKGROUND THREAD
             withContext(Dispatchers.IO) {
                 try {
-                    // 1. Parse CSV
-                    val csvResult = CsvImportUtils.parseCsvFile(context, uri)
-                    if (csvResult.students.isEmpty()) {
+                    val db = AppDatabase.getInstance(context)
+                    val currentUser = db.userDao().getCurrentUser()
+                    val sid = currentUser?.sekolahId ?: "UNKNOWN"
+
+                    if (sid == "UNKNOWN") {
                         _state.value = _state.value.copy(
                             isProcessing = false,
-                            status = "No valid students found in CSV",
-                            errorCount = csvResult.errors.size
+                            status = "Error: Sesi sekolah tidak ditemukan."
                         )
                         return@withContext
                     }
 
-                    // 2. Load Existing Faces SEKALI SAJA di awal untuk optimasi
-                    val faceDao = AppDatabase.getInstance(context).faceDao()
-                    val existingFaces = faceDao.getAllFaces().toMutableList() // Mutable agar bisa ditambah realtime
+                    val csvResult = CsvImportUtils.parseCsvFile(context, uri)
+                    val faceDao = db.faceDao()
+                    val existingFaces = faceDao.getAllFaces()
+                    val resultsList = mutableListOf<ProcessResult>()
                     
-                    val results = mutableListOf<ProcessResult>()
-                    var successCount = 0
-                    var duplicateCount = 0
-                    var errorCount = 0
+                    var success = 0
+                    var dupes = 0
+                    var errors = 0
                     val totalStudents = csvResult.students.size
 
-                    // 3. Loop Processing
                     csvResult.students.forEachIndexed { index, student ->
                         try {
-                            val photoType = BulkPhotoProcessor.getPhotoSourceType(student.photoUrl)
-                            
-                            // Update UI State (Progress)
                             _state.value = _state.value.copy(
                                 progress = (index + 1).toFloat() / totalStudents,
-                                status = "Processing ${index + 1}/$totalStudents: ${student.name}",
-                                currentPhotoType = "Src: $photoType",
-                                currentPhotoSize = "Processing..."
+                                status = "Memproses ${index + 1}/$totalStudents: ${student.name}"
                             )
 
-                            // Process Single Student
-                            val result = processStudent(context, student, faceDao, existingFaces)
+                            val result = processStudent(context, student, sid, faceDao, existingFaces)
                             
-                            // Update Counters & List
-                            when {
-                                result.status.contains("Registered") -> {
-                                    successCount++
-                                    // Jika sukses, tambahkan ke list existingFaces agar siswa berikutnya 
-                                    // dalam batch ini tidak duplikat dengan siswa ini
-                                    // (Kita perlu objek FaceEntity dummy untuk pembanding visual sementara)
-                                    // *Catatan: Embedding diambil dari result jika memungkinkan, tapi 
-                                    // karena ProcessResult tidak nyimpan embedding, kita skip update list visual sementara
-                                    // atau refactor processStudent untuk return embedding.*
-                                }
-                                result.status.startsWith("Duplicate") -> duplicateCount++
-                                else -> errorCount++
-                            }
-                            results.add(result)
-
-                            _state.value = _state.value.copy(
-                                currentPhotoSize = "Size: ${formatFileSize(result.photoSize)}"
-                            )
+                            if (result.isSuccess) success++ 
+                            else if (result.status.contains("Duplicate")) dupes++ 
+                            else errors++
+                            
+                            resultsList.add(result)
                         } catch (e: Exception) {
-                            errorCount++
-                            results.add(
+                            errors++
+                            resultsList.add(
                                 ProcessResult(
-                                    studentId = student.studentId,
-                                    name = student.name,
-                                    status = "Error",
-                                    error = e.message ?: "Unknown error"
+                                    studentId = student.studentId, 
+                                    name = student.name, 
+                                    status = "Error", 
+                                    error = e.message
                                 )
                             )
                         }
                     }
 
-                    // 4. Refresh Cache & Finalize
-                    try {
-                        FaceCache.refresh(context)
-                    } catch (e: Exception) {
-                        Log.e("RegisterViewModel", "Failed to refresh FaceCache", e)
-                    }
+                    // 🧠 Refresh Cache so scanner recognizes new students immediately
+                    FaceCache.refresh(context)
 
-                    _state.value = ProcessingState(
+                    _state.value = _state.value.copy(
                         isProcessing = false,
-                        results = results,
-                        successCount = successCount,
-                        duplicateCount = duplicateCount,
-                        errorCount = errorCount,
-                        status = "Done: $successCount success, $duplicateCount duplicates, $errorCount errors"
+                        results = resultsList,
+                        successCount = success,
+                        duplicateCount = dupes,
+                        errorCount = errors,
+                        status = "Selesai: $success sukses, $dupes duplikat, $errors error"
                     )
-
                 } catch (e: Exception) {
-                    _state.value = ProcessingState(
-                        isProcessing = false,
-                        status = "Processing crashed: ${e.message}",
-                        errorCount = 1
+                    _state.value = _state.value.copy(
+                        isProcessing = false, 
+                        status = "Terhenti: ${e.message}"
                     )
                 }
             }
@@ -178,124 +155,79 @@ class RegisterViewModel : ViewModel() {
     private suspend fun processStudent(
         context: Context,
         student: CsvImportUtils.CsvStudentData,
-        faceDao: com.example.crashcourse.db.FaceDao,
-        existingFacesCache: List<FaceEntity> // 🚀 Parameter baru: Cache Wajah
+        sekolahId: String,
+        faceDao: FaceDao,
+        existingFacesCache: List<FaceEntity>
     ): ProcessResult {
-        
-        // A. Cek Duplicate ID dulu (Paling cepat)
-        // Cek di DB
+        // 1. Primary Key Check
         if (faceDao.getFaceByStudentId(student.studentId) != null) {
-             return ProcessResult(
-                studentId = student.studentId,
-                name = student.name,
-                status = "Duplicate (ID Exists)",
-                photoSize = 0
+            return ProcessResult(
+                studentId = student.studentId, 
+                name = student.name, 
+                status = "Duplicate ID", 
+                isSuccess = false
             )
         }
 
-        // B. Process Photo & Embedding
-        val photoResult = BulkPhotoProcessor.processPhotoSource(
-            context = context,
-            photoSource = student.photoUrl,
-            studentId = student.studentId
-        )
-
+        // 2. Photo & AI Embedding
+        val photoResult = BulkPhotoProcessor.processPhotoSource(context, student.photoUrl, student.studentId)
         if (!photoResult.success) {
             return ProcessResult(
-                studentId = student.studentId,
-                name = student.name,
-                status = "Error",
-                error = photoResult.error ?: "Photo failed",
-                photoSize = photoResult.originalSize
+                studentId = student.studentId, 
+                name = student.name, 
+                status = "Photo Error", 
+                error = photoResult.error
             )
         }
 
-        val bitmap = BitmapFactory.decodeFile(photoResult.localPhotoUrl)
-            ?: return ProcessResult(
-                studentId = student.studentId,
-                name = student.name,
-                status = "Error",
-                error = "Bitmap decode failed",
-                photoSize = photoResult.originalSize
-            )
-
-        val embeddingResult = PhotoProcessingUtils.processBitmapForFaceEmbedding(context, bitmap)
-            ?: return ProcessResult(
-                studentId = student.studentId,
-                name = student.name,
-                status = "Error",
-                error = "No face detected",
-                photoSize = photoResult.originalSize
-            )
+        val bitmap = BitmapFactory.decodeFile(photoResult.localPhotoUrl) 
+            ?: return ProcessResult(student.studentId, student.name, status = "Decode Error")
+            
+        val embeddingResult = PhotoProcessingUtils.processBitmapForFaceEmbedding(context, bitmap) 
+            ?: return ProcessResult(student.studentId, student.name, status = "No Face Detected")
 
         val (faceBitmap, embedding) = embeddingResult
 
-        // C. Visual Duplicate Check (Pakai Cache List, bukan Query DB berulang)
-        val DUPLICATE_THRESHOLD = 0.75f // Sesuaikan threshold MobileFaceNet (biasanya 0.75 - 0.80)
-        
-        // Loop ini ringan karena hanya hitung matematika di memori (tanpa IO DB)
+        // 3. AI Anti-Duplicate Check (Cosine Similarity)
         for (face in existingFacesCache) {
-            val dist = NativeMath.cosineDistance(face.embedding, embedding)
-            if (dist > DUPLICATE_THRESHOLD) { // Cosine Distance: Makin besar makin mirip (range -1 s/d 1) ??
-                // ⚠️ NOTE: Pastikan NativeMath kamu return Distance (0..2, makin kecil makin mirip) 
-                // atau Similarity (0..1, makin besar makin mirip).
-                // Biasanya Cosine Distance: 0 = identik. Threshold biasanya < 0.25 atau < 0.4 tergantung model.
-                // Jika pakai L2 Distance, threshold biasanya 1.0 - 1.2.
-                // ASUMSI KODE LAMA: dist <= THRESHOLD (Distance based)
+            if (NativeMath.cosineDistance(face.embedding, embedding) < 0.45f) {
+                return ProcessResult(
+                    studentId = student.studentId, 
+                    name = student.name, 
+                    status = "Duplicate Face: ${face.name}"
+                )
             }
         }
-        
-        // Revisi Logika Distance sesuai kode original kamu:
-        val THRESHOLD_DISTANCE = 0.4f // Contoh jika pakai Cosine Distance murni (1 - similarity)
-        for (face in existingFacesCache) {
-             val dist = NativeMath.cosineDistance(face.embedding, embedding)
-             // Asumsi NativeMath mengembalikan distance (semakin kecil semakin mirip)
-             if (dist < THRESHOLD_DISTANCE) { 
-                 return ProcessResult(
-                    studentId = student.studentId,
-                    name = student.name,
-                    status = "Duplicate (Face Match: ${face.name})",
-                    photoSize = photoResult.originalSize
-                )
-             }
-        }
 
-        // D. Save & Insert
-        val photoPath = PhotoStorageUtils.saveFacePhoto(context, faceBitmap, student.studentId)
-            ?: return ProcessResult(
-                studentId = student.studentId,
-                name = student.name,
-                status = "Error",
-                error = "Save photo failed",
-                photoSize = photoResult.originalSize
-            )
-
+        // 4. Persistence & Cloud Sync
+        val path = PhotoStorageUtils.saveFacePhoto(context, faceBitmap, student.studentId)
         val faceEntity = FaceEntity(
             studentId = student.studentId,
+            sekolahId = sekolahId,
             name = student.name,
-            photoUrl = photoPath,
+            photoUrl = path ?: "",
             embedding = embedding,
-            className = student.className ?: "",
-            subClass = student.subClass ?: "",
-            grade = student.grade ?: "",
-            subGrade = student.subGrade ?: "",
-            program = student.program ?: "",
-            role = student.role ?: "",
-            timestamp = System.currentTimeMillis()
+            className = student.className ?: "Umum"
         )
-
+        
+        // A. Save to Local Room
         faceDao.insert(faceEntity)
-
-        // E. Cloud Sync
-        val isSynced = FirestoreHelper.syncStudentToFirestore(faceEntity)
-        val statusMessage = if (isSynced) "Registered & Synced" else "Registered (Local Only)"
+        
+        // B. Save to Cloud Firestore (Using Modular Repository)
+        // ✅ UPDATED: Use FirestoreStudent instead of FirestoreHelper
+        FirestoreStudent.uploadStudent(faceEntity)
 
         return ProcessResult(
-            studentId = student.studentId,
-            name = student.name,
-            status = statusMessage,
+            studentId = student.studentId, 
+            name = student.name, 
+            status = "Registered", 
+            isSuccess = true, 
             photoSize = photoResult.processedSize
         )
+    }
+
+    fun resetState() {
+        _state.value = ProcessingState()
     }
 
     private fun formatFileSize(size: Long): String {
@@ -305,9 +237,5 @@ class RegisterViewModel : ViewModel() {
             size < 1024 * 1024 -> "${size / 1024} KB"
             else -> String.format("%.1f MB", size / (1024.0 * 1024.0))
         }
-    }
-
-    fun resetState() {
-        _state.value = ProcessingState()
     }
 }

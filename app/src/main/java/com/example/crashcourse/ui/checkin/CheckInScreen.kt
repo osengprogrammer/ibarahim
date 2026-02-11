@@ -1,12 +1,11 @@
-// 🚀 INI WAJIB: Harus .ui.checkin agar MainScreen bisa menemukannya
 package com.example.crashcourse.ui.checkin
 
 import android.graphics.Rect
 import android.media.AudioManager
 import android.media.ToneGenerator
 import android.speech.tts.TextToSpeech
+import android.util.Log
 import androidx.compose.animation.*
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -20,75 +19,80 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.crashcourse.db.FaceCache
 import com.example.crashcourse.scanner.FaceScanner
 import com.example.crashcourse.ui.components.FaceOverlay
 import com.example.crashcourse.ui.theme.*
 import com.example.crashcourse.utils.NativeMath
+import com.example.crashcourse.viewmodel.AuthState
+import com.example.crashcourse.viewmodel.AuthViewModel
 import com.example.crashcourse.viewmodel.FaceViewModel
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.withContext
-import java.text.SimpleDateFormat
 import java.util.*
 
+/**
+ * 👁️ Azura Tech AI Check-In Screen
+ * Fitur:
+ * 1. Liveness Detection (Cegah foto HP)
+ * 2. Scoped Recognition (Hanya siswa sekolah tsb)
+ * 3. Anti-Spam (Cooldown 30 detik per siswa)
+ */
 @Composable
 fun CheckInScreen(
     useBackCamera: Boolean,
-    viewModel: FaceViewModel = viewModel()
+    faceViewModel: FaceViewModel = viewModel(),
+    authViewModel: AuthViewModel = viewModel()
 ) {
-    // ... (SISA KODE SAMA SEPERTI SEBELUMNYA, TIDAK PERLU DIUBAH) ...
-    // ... (PASTIKAN ISI KODENYA LENGKAP) ...
     val context = LocalContext.current
+    
+    // --- 🔐 AUTH & SESSION CONTEXT ---
+    val authState by authViewModel.authState.collectAsStateWithLifecycle()
+
+    // Camera & UI States
     var currentCameraIsBack by remember { mutableStateOf(useBackCamera) }
     var gallery by remember { mutableStateOf<List<Pair<String, FloatArray>>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
-
-    // 🚀 ISO / Light Boost State
     var isLightBoostOn by remember { mutableStateOf(false) }
 
-    // --- ⏱️ COOLDOWN STATE ---
-    var successCountdown by remember { mutableIntStateOf(0) }
-    val isCoolingDown = successCountdown > 0
-
-    // Status State
+    // Logic States
     var matchName by remember { mutableStateOf<String?>(null) }
     var alreadyCheckedIn by remember { mutableStateOf(false) }
-    var secondsRemaining by remember { mutableIntStateOf(0) }
+    var cooldownSeconds by remember { mutableIntStateOf(0) }
+    
+    // Liveness (Anti-Photo) States
+    // 0: Cari Wajah, 1: Wajah Ditemukan (Minta Kedip), 2: Kedip Terdeteksi (Verifikasi), 3: Selesai
+    var livenessState by remember { mutableIntStateOf(0) }
+    var livenessMessage by remember { mutableStateOf("Cari Wajah...") }
 
-    // --- 🛡️ SECURITY & LIVENESS STATE ---
-    var livenessState by remember { mutableIntStateOf(0) } // 0: Init, 1: Blinked, 2: Verified
-    var livenessMessage by remember { mutableStateOf("Position face") }
-    var lastFaceDetectedTime by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    var verifiedEmbedding by remember { mutableStateOf<FloatArray?>(null) }
-
-    // --- 🛡️ CONSENSUS (ANTI-FALSE POSITIVE) ---
+    // Consensus (Agar tidak flicker)
     var candidateName by remember { mutableStateOf<String?>(null) }
     var stabilityCounter by remember { mutableIntStateOf(0) }
-    val REQUIRED_STABILITY = 3
+    val REQUIRED_STABILITY = 2 // Butuh 2 frame berturut-turut yang sama
 
-    // UI Drawing State
+    // Face Drawing States
     var faceBounds by remember { mutableStateOf<List<Rect>>(emptyList()) }
     var imageSize by remember { mutableStateOf(IntSize.Zero) }
     var imageRotation by remember { mutableIntStateOf(0) }
 
-    // Timestamps
-    val checkInTimestamps = remember { mutableStateMapOf<String, Long>() }
-    val lastWaitSpokenTime = remember { mutableStateMapOf<String, Long>() }
-
-    // Audio & TTS
+    // Anti-Spam & Audio
+    // Map lokal untuk mencegah spam request ke DB/Firestore (Cache session)
+    val checkInTimestamps = remember { mutableMapOf<String, Long>() }
     val toneGen = remember { ToneGenerator(AudioManager.STREAM_MUSIC, 100) }
     var tts by remember { mutableStateOf<TextToSpeech?>(null) }
 
-    // Initialize TTS
+    // --- 🎙️ INITIALIZE TTS ---
     DisposableEffect(Unit) {
         val ttsInstance = TextToSpeech(context) { status ->
             if (status == TextToSpeech.SUCCESS) {
-                tts?.language = Locale.US
-                tts?.setSpeechRate(1.1f)
+                val result = tts?.setLanguage(Locale("id", "ID"))
+                if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
+                    Log.e("TTS", "Bahasa Indonesia tidak didukung")
+                }
             }
         }
         tts = ttsInstance
@@ -98,305 +102,305 @@ fun CheckInScreen(
         }
     }
 
-    // Helper Functions
-    fun playSuccessSound() = toneGen.startTone(ToneGenerator.TONE_PROP_ACK, 150)
-    fun speak(msg: String) {
-        tts?.speak(msg, TextToSpeech.QUEUE_FLUSH, null, null)
-    }
-
-    // 🔄 COUNTDOWN LOGIC
-    LaunchedEffect(successCountdown) {
-        if (successCountdown > 0) {
-            delay(1000L)
-            successCountdown -= 1
-            if (successCountdown == 0) {
-                matchName = null
-                candidateName = null
-                stabilityCounter = 0
-                livenessState = 0
-                verifiedEmbedding = null
+    // --- 📦 LOAD DATA SISWA (Scoped per Sekolah) ---
+    LaunchedEffect(authState) {
+        if (authState is AuthState.Active) {
+            val user = authState as AuthState.Active
+            loading = true
+            
+            // 🔄 Refresh RAM Cache dari DB Lokal
+            FaceCache.refresh(context)
+            
+            // 🛡️ SECURITY FILTER: Hanya load embedding milik sekolah ini
+            val filteredFaces = FaceCache.getFaces().filter { face ->
+                val isSameSchool = face.sekolahId == user.sekolahId
+                // Jika Guru biasa (bukan Admin), filter berdasarkan kelas yg diajar (Opsional)
+                // val isScoped = if (user.role == "ADMIN") true else user.assignedClasses.contains(face.className)
+                
+                isSameSchool // && isScoped (Aktifkan jika ingin strict per kelas)
             }
+
+            gallery = filteredFaces.map { it.name to it.embedding }
+            loading = false
+            Log.d("CheckInScreen", "Loaded ${gallery.size} faces for School: ${user.schoolName}")
         }
     }
 
-    // Load Local Face Gallery
-    LaunchedEffect(Unit) {
-        withContext(Dispatchers.IO) {
-            val loadedGallery = FaceCache.load(context)
-            withContext(Dispatchers.Main) {
-                gallery = loadedGallery
-                loading = false
-            }
+    // --- ⏲️ RESET TIMER UI ---
+    // Menghilangkan popup sukses setelah 3 detik
+    LaunchedEffect(matchName) {
+        if (matchName != null && !alreadyCheckedIn) {
+            delay(3000L)
+            matchName = null
+            livenessState = 0
+            stabilityCounter = 0
+            livenessMessage = "Cari Wajah..."
+        } else if (matchName != null && alreadyCheckedIn) {
+            // Jika cooldown, hilangkan lebih cepat
+            delay(2000L)
+            matchName = null
         }
     }
 
     Box(
-        Modifier
+        modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
     ) {
-        if (loading) {
-            CircularProgressIndicator(Modifier.align(Alignment.Center), color = AzuraPrimary)
+        if (loading || authState !is AuthState.Active) {
+            Column(
+                modifier = Modifier.align(Alignment.Center),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                CircularProgressIndicator(color = AzuraPrimary)
+                Spacer(modifier = Modifier.height(16.dp))
+                Text("Memuat Data Wajah...", color = Color.White)
+            }
         } else {
-            // 1. CAMERA LAYER
+            val activeUser = authState as AuthState.Active
+
+            // =================================================
+            // 1. SCANNER ENGINE (CAMERA PREVIEW)
+            // =================================================
             FaceScanner(
                 useBackCamera = currentCameraIsBack,
                 enableLightBoost = isLightBoostOn
             ) { result ->
-                // This callback runs on every frame analysis
-                if (isCoolingDown) return@FaceScanner
+                // Jika sedang menampilkan hasil sukses, pause scanning sebentar
+                if (matchName != null && !alreadyCheckedIn) return@FaceScanner
 
-                val now = System.currentTimeMillis()
-                val currentFace = result.bounds.firstOrNull()
-
-                // Update UI State for Overlay
                 faceBounds = result.bounds
                 imageSize = result.imageSize
                 imageRotation = result.rotation
 
-                // Face Loss Handling
-                if (currentFace == null) {
-                    if (now - lastFaceDetectedTime > 1200) {
-                        livenessState = 0
-                        livenessMessage = "Position face"
-                        verifiedEmbedding = null
-                        candidateName = null
-                        stabilityCounter = 0
-                    }
-                    return@FaceScanner
-                } else {
-                    lastFaceDetectedTime = now
-                }
-
-                // Blink Logic
-                // Note: result.leftEyeOpenProb is nullable, default to 1f (open) if null
-                val leftEye = result.leftEyeOpenProb ?: 1f
-                val rightEye = result.rightEyeOpenProb ?: 1f
+                val currentFace = result.bounds.firstOrNull()
                 
-                val eyesClosed = leftEye < 0.15f && rightEye < 0.15f
-                val eyesOpen = leftEye > 0.80f && rightEye > 0.80f
+                // --- KONDISI: TIDAK ADA WAJAH ---
+                if (currentFace == null) {
+                    stabilityCounter = 0
+                    livenessState = 0
+                    livenessMessage = "Cari Wajah..."
+                    return@FaceScanner
+                }
 
-                if (livenessState != 2 && result.embeddings.isNotEmpty()) {
-                    if (eyesClosed) {
-                        livenessState = 1
-                        livenessMessage = "Blink detected..."
-                    } else if (livenessState == 1 && eyesOpen) {
-                        livenessState = 2
-                        livenessMessage = "Verified ✅"
-                        verifiedEmbedding = result.embeddings.first().second
-                        playSuccessSound()
-                    } else if (livenessState == 0) {
-                        livenessMessage = "Blink to verify"
+                // --- DETEKSI KEDIP (LIVENESS) ---
+                // Ambang batas probabilitas mata terbuka (0.0 - 1.0)
+                val leftOpen = result.leftEyeOpenProb ?: 1.0f
+                val rightOpen = result.rightEyeOpenProb ?: 1.0f
+                
+                val eyesClosed = leftOpen < 0.25f && rightOpen < 0.25f
+                val eyesOpen = leftOpen > 0.85f && rightOpen > 0.85f
+
+                if (livenessState == 0) {
+                    livenessMessage = "Silakan Kedip 😉"
+                    if (eyesClosed) livenessState = 1 // Mata tertutup terdeteksi
+                } else if (livenessState == 1) {
+                    if (eyesOpen) {
+                        livenessState = 2 // Mata terbuka kembali -> VALID BLINK
+                        toneGen.startTone(ToneGenerator.TONE_PROP_BEEP, 100)
+                        livenessMessage = "Mengidentifikasi..."
                     }
                 }
 
-                // AI Recognition Logic
-                if (result.embeddings.isNotEmpty() && livenessState == 2 && verifiedEmbedding != null) {
-                    val currentEmbedding = result.embeddings.first().second
+                // --- PENGENALAN WAJAH (Hanya jika Liveness Lolos) ---
+                if (livenessState == 2 && result.embeddings.isNotEmpty()) {
+                    val currentEmb = result.embeddings.first().second
                     
-                    // Verify if the current face still matches the one that blinked
-                    val identityMatch = NativeMath.cosineDistance(verifiedEmbedding!!, currentEmbedding)
+                    var bestDist = 1.0f
+                    var bestName: String? = null
 
-                    if (identityMatch > 0.30f) { // Threshold for "same person" continuity
-                        livenessState = 0
-                        livenessMessage = "Identity mismatch! Re-blink"
-                        verifiedEmbedding = null
-                        stabilityCounter = 0
-                    } else {
-                        // RECOGNITION AGAINST GALLERY
-                        var bestDist = 10f
-                        var secondBestDist = 10f
-                        var bestName: String? = null
+                    // 🔍 Linear Search di Gallery (Cukup cepat untuk < 500 siswa)
+                    for ((name, dbEmb) in gallery) {
+                        val dist = NativeMath.cosineDistance(dbEmb, currentEmb)
+                        if (dist < bestDist) {
+                            bestDist = dist
+                            bestName = name
+                        }
+                    }
 
-                        for ((name, dbEmbedding) in gallery) {
-                            val dist = NativeMath.cosineDistance(dbEmbedding, currentEmbedding)
-                            if (dist < bestDist) {
-                                secondBestDist = bestDist
-                                bestDist = dist
-                                bestName = name
-                            } else if (dist < secondBestDist) {
-                                secondBestDist = dist
-                            }
+                    // Ambang Batas Kemiripan (0.4 - 0.6 biasanya optimal untuk MobileFaceNet)
+                    // Semakin kecil = semakin ketat.
+                    val THRESHOLD = 0.65f 
+
+                    if (bestDist < THRESHOLD && bestName != null) {
+                        if (bestName == candidateName) {
+                            stabilityCounter++
+                        } else {
+                            candidateName = bestName
+                            stabilityCounter = 1
                         }
 
-                        val MATCH_THRESHOLD = 0.75f // Adjust based on your model
-                        val AMBIGUITY_GAP = 0.05f
+                        // Butuh konsistensi beberapa frame agar tidak salah baca
+                        if (stabilityCounter >= REQUIRED_STABILITY) {
+                            val now = System.currentTimeMillis()
+                            val lastCheck = checkInTimestamps[bestName] ?: 0L
+                            val diff = now - lastCheck
+                            val COOLDOWN_MS = 30_000L // 30 Detik Cooldown
 
-                        if (bestDist < MATCH_THRESHOLD && (secondBestDist - bestDist) > AMBIGUITY_GAP) {
-                            if (bestName == candidateName) {
-                                stabilityCounter++
+                            if (diff > COOLDOWN_MS) {
+                                // ✅ SUKSES CHECK-IN
+                                checkInTimestamps[bestName] = now
+                                
+                                // Panggil ViewModel untuk simpan ke Room & Firestore
+                                faceViewModel.saveCheckInByName(bestName) 
+                                
+                                matchName = bestName
+                                alreadyCheckedIn = false
+                                toneGen.startTone(ToneGenerator.TONE_PROP_ACK, 200)
+                                tts?.speak("Selamat datang, $bestName", TextToSpeech.QUEUE_FLUSH, null, null)
                             } else {
-                                candidateName = bestName
-                                stabilityCounter = 1
+                                // ⏳ SPAM DETECTED
+                                matchName = bestName
+                                alreadyCheckedIn = true
+                                cooldownSeconds = ((COOLDOWN_MS - diff) / 1000).toInt()
                             }
-
-                            if (stabilityCounter >= REQUIRED_STABILITY && bestName != null) {
-                                // CONFIRMED MATCH
-                                val name = bestName
-                                val lastCheck = checkInTimestamps[name] ?: 0L
-                                val diff = now - lastCheck
-                                val COOLDOWN_MS = 20_000L // 20 seconds cooldown
-
-                                if (diff > COOLDOWN_MS) {
-                                    // New Check-in
-                                    checkInTimestamps[name] = now
-                                    viewModel.saveCheckIn(name)
-                                    
-                                    matchName = name
-                                    alreadyCheckedIn = false
-                                    successCountdown = 3 // Start UI cooldown
-                                    speak("Welcome $name")
-                                    
-                                    // Reset Liveness for next user
-                                    livenessState = 0
-                                    verifiedEmbedding = null
-                                    stabilityCounter = 0
-                                    candidateName = null
-                                } else {
-                                    // Already checked in recently
-                                    matchName = name
-                                    alreadyCheckedIn = true
-                                    secondsRemaining = ((COOLDOWN_MS - diff) / 1000).toInt().coerceAtLeast(0)
-
-                                    val lastSpoken = lastWaitSpokenTime[name] ?: 0L
-                                    if (now - lastSpoken > 5_000) { // Speak warning every 5s
-                                        speak("Please wait")
-                                        lastWaitSpokenTime[name] = now
-                                    }
-                                }
-                            }
-                        } else {
+                            
+                            // Reset state scanning setelah match ditemukan
+                            livenessState = 0 
                             stabilityCounter = 0
                         }
+                    } else if (bestDist > 0.80f) {
+                        livenessMessage = "Wajah Tidak Dikenal"
                     }
                 }
             }
 
-            // 2. FACE OVERLAY
-            if (imageSize != IntSize.Zero) {
-                FaceOverlay(
-                    faceBounds = faceBounds,
-                    imageSize = imageSize,
-                    imageRotation = imageRotation,
-                    isFrontCamera = !currentCameraIsBack,
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
+            // =================================================
+            // 2. OVERLAY LAYER (KOTAK WAJAH)
+            // =================================================
+            FaceOverlay(
+                faceBounds = faceBounds,
+                imageSize = imageSize,
+                imageRotation = imageRotation,
+                isFrontCamera = !currentCameraIsBack,
+                modifier = Modifier.fillMaxSize()
+            )
 
-            // 3. UI OVERLAYS
+            // =================================================
+            // 3. UI HUD & FEEDBACK
+            // =================================================
             Box(
-                Modifier
+                modifier = Modifier
                     .fillMaxSize()
-                    .padding(16.dp)
+                    .padding(24.dp)
             ) {
-
+                
                 // --- TOP BAR ---
-                Surface(
+                Row(
                     modifier = Modifier
                         .align(Alignment.TopCenter)
-                        .fillMaxWidth()
-                        .padding(top = 8.dp),
-                    shape = RoundedCornerShape(16.dp),
-                    color = Color.Black.copy(alpha = 0.6f),
-                    border = BorderStroke(1.dp, Color.White.copy(alpha = 0.2f))
+                        .fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                    // Info Sekolah & Status
+                    Card(
+                        colors = CardDefaults.cardColors(
+                            containerColor = Color.Black.copy(alpha = 0.6f)
+                        ),
+                        shape = RoundedCornerShape(12.dp)
                     ) {
-                        Column {
+                        Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
                             Text(
-                                text = "AZURA AI",
-                                style = MaterialTheme.typography.labelLarge.copy(color = AzuraAccent)
+                                text = activeUser.schoolName.uppercase(),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = AzuraAccent,
+                                fontWeight = FontWeight.Bold
                             )
-                            val statusColor = if (isCoolingDown) AzuraAccent else if (livenessState == 2) Color.Green else Color.Yellow
+                            Spacer(Modifier.height(4.dp))
                             Text(
-                                text = if (isCoolingDown) "COOLDOWN: $successCountdown" else livenessMessage.uppercase(),
-                                style = MaterialTheme.typography.labelSmall.copy(color = statusColor)
+                                text = livenessMessage,
+                                color = when(livenessState) {
+                                    0 -> Color.White
+                                    1 -> Color.Yellow
+                                    2 -> Color.Green
+                                    else -> Color.White
+                                },
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold
                             )
                         }
+                    }
 
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            // Light Boost Toggle
-                            IconButton(
-                                onClick = { isLightBoostOn = !isLightBoostOn },
-                                colors = IconButtonDefaults.iconButtonColors(
-                                    containerColor = if (isLightBoostOn) AzuraAccent.copy(0.2f) else Color.Transparent
+                    // Tombol Kontrol (Flash & Camera Switch)
+                    Row {
+                        IconButton(
+                            onClick = { isLightBoostOn = !isLightBoostOn },
+                            modifier = Modifier
+                                .background(
+                                    if (isLightBoostOn) Color.Yellow.copy(0.3f) else Color.Black.copy(0.6f), 
+                                    shape = RoundedCornerShape(50)
                                 )
-                            ) {
-                                Icon(
-                                    imageVector = if (isLightBoostOn) Icons.Filled.WbSunny else Icons.Outlined.WbSunny,
-                                    contentDescription = "Light Boost",
-                                    tint = if (isLightBoostOn) Color.Yellow else Color.White
-                                )
-                            }
-                            Spacer(Modifier.width(8.dp))
-                            // Camera Switch
-                            IconButton(onClick = { currentCameraIsBack = !currentCameraIsBack }) {
-                                Icon(Icons.Default.CameraAlt, "Switch Camera", tint = Color.White)
-                            }
+                        ) {
+                            Icon(
+                                Icons.Outlined.WbSunny, 
+                                contentDescription = "Flash", 
+                                tint = if (isLightBoostOn) Color.Yellow else Color.White
+                            )
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        IconButton(
+                            onClick = { currentCameraIsBack = !currentCameraIsBack },
+                            modifier = Modifier
+                                .background(Color.Black.copy(0.6f), shape = RoundedCornerShape(50))
+                        ) {
+                            Icon(
+                                Icons.Default.FlipCameraAndroid, 
+                                contentDescription = "Switch Cam", 
+                                tint = Color.White
+                            )
                         }
                     }
                 }
 
-                // --- BOTTOM NOTIFICATION CARD ---
+                // --- BOTTOM RESULT CARD ---
                 AnimatedVisibility(
                     visible = matchName != null,
-                    enter = slideInVertically(initialOffsetY = { 100 }) + fadeIn(),
-                    exit = slideOutVertically(targetOffsetY = { 100 }) + fadeOut(),
-                    modifier = Modifier.align(Alignment.BottomCenter)
+                    enter = slideInVertically { it } + fadeIn(),
+                    exit = slideOutVertically { it } + fadeOut(),
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(bottom = 32.dp)
                 ) {
-                    val isWarning = alreadyCheckedIn
-
                     Card(
                         colors = CardDefaults.cardColors(
-                            containerColor = if (isWarning) Color(0xFF1E1E1E) else AzuraPrimary
+                            containerColor = if (alreadyCheckedIn) Color(0xFF333333) else AzuraPrimary
                         ),
                         shape = RoundedCornerShape(24.dp),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(bottom = 24.dp)
-                            .shadow(20.dp, RoundedCornerShape(24.dp)),
-                        border = BorderStroke(2.dp, if (isWarning) AzuraError else AzuraAccent)
+                            .shadow(16.dp, RoundedCornerShape(24.dp))
                     ) {
                         Row(
                             modifier = Modifier.padding(20.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            // Avatar Icon Background
-                            Surface(
-                                shape = RoundedCornerShape(12.dp),
-                                color = Color.White.copy(alpha = 0.2f),
-                                modifier = Modifier.size(56.dp)
-                            ) {
-                                Icon(
-                                    imageVector = if (isWarning) Icons.Default.Face else Icons.Default.CheckCircle,
-                                    contentDescription = null,
-                                    tint = if (isWarning) Color.White else AzuraAccent,
-                                    modifier = Modifier.padding(12.dp)
-                                )
-                            }
-
-                            Spacer(modifier = Modifier.width(16.dp))
-
+                            Icon(
+                                imageVector = if (alreadyCheckedIn) Icons.Default.Timer else Icons.Default.CheckCircle,
+                                contentDescription = null,
+                                tint = if (alreadyCheckedIn) Color.Yellow else Color.White,
+                                modifier = Modifier.size(48.dp)
+                            )
+                            Spacer(Modifier.width(16.dp))
                             Column {
                                 Text(
-                                    text = if (isWarning) "DUPLICATE SCAN" else "SUCCESS VERIFIED",
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        color = if (isWarning) AzuraError else AzuraAccent
+                                    text = if (alreadyCheckedIn) "SUDAH ABSEN HARI INI" else "ABSENSI BERHASIL",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (alreadyCheckedIn) Color.Yellow else Color.White.copy(0.8f)
+                                )
+                                Text(
+                                    text = matchName ?: "",
+                                    style = MaterialTheme.typography.headlineSmall,
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                if (alreadyCheckedIn) {
+                                    Text(
+                                        text = "Dapat absen lagi dalam ${cooldownSeconds}s",
+                                        color = Color.White.copy(0.6f),
+                                        style = MaterialTheme.typography.bodySmall
                                     )
-                                )
-                                Text(
-                                    text = matchName ?: "Unknown",
-                                    style = MaterialTheme.typography.headlineMedium.copy(color = Color.White)
-                                )
-                                val time = remember { SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date()) }
-                                Text(
-                                    text = if (isWarning) "Please wait ${secondsRemaining}s" else "Check-in at $time",
-                                    color = Color.LightGray,
-                                    style = MaterialTheme.typography.bodySmall
-                                )
+                                }
                             }
                         }
                     }

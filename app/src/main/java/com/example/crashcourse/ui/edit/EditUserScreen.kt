@@ -1,115 +1,105 @@
 package com.example.crashcourse.ui.edit
 
 import android.graphics.Bitmap
+import android.widget.Toast
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
-import androidx.compose.runtime.* import androidx.compose.ui.Alignment
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.example.crashcourse.db.FaceEntity
-import com.example.crashcourse.ui.components.StudentFormBody // 🚀 PENTING: Import Komponen Reusable
-import com.example.crashcourse.ui.theme.AzuraPrimary
-import com.example.crashcourse.utils.PhotoStorageUtils
-import com.example.crashcourse.utils.showToast
-import com.example.crashcourse.viewmodel.FaceViewModel
-import com.example.crashcourse.viewmodel.OptionsViewModel
+import com.example.crashcourse.db.MasterClassWithNames
 import com.example.crashcourse.ui.add.CaptureMode
 import com.example.crashcourse.ui.add.FaceCaptureScreen
+import com.example.crashcourse.ui.components.MasterClassDropdown
+import com.example.crashcourse.ui.theme.AzuraPrimary
+import com.example.crashcourse.utils.PhotoStorageUtils
+import com.example.crashcourse.viewmodel.FaceViewModel
+import com.example.crashcourse.viewmodel.MasterClassViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+/**
+ * ✏️ Azura Tech Edit User Screen (FIXED)
+ * Mengelola pembaruan profil biometrik, foto, dan perpindahan kelas.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EditUserScreen(
     studentId: String,
-    onNavigateBack: () -> Unit = {},
-    onUserUpdated: () -> Unit = {},
+    onNavigateBack: () -> Unit,
+    onUpdateSuccess: () -> Unit,
     faceViewModel: FaceViewModel = viewModel(),
-    optionsViewModel: OptionsViewModel = viewModel()
+    masterClassViewModel: MasterClassViewModel = viewModel()
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     
-    // 1. Ambil list wajah dari ViewModel
-    val allFacesState: List<FaceEntity> by faceViewModel.faceList.collectAsStateWithLifecycle(initialValue = emptyList())
+    // 1. Data Observation
+    val allFacesState by faceViewModel.faceList.collectAsStateWithLifecycle()
+    val masterClasses by masterClassViewModel.masterClassesWithNames.collectAsStateWithLifecycle(initialValue = emptyList())
     
-    // 2. Cari user secara spesifik
-    val user: FaceEntity? = remember(allFacesState, studentId) { 
+    // 2. Cari User berdasarkan ID
+    val user = remember(allFacesState, studentId) { 
         allFacesState.find { it.studentId == studentId } 
     }
 
-    // Master Data Options
-    val classOptions by optionsViewModel.classOptions.collectAsStateWithLifecycle(emptyList())
-    val subClassOptions by optionsViewModel.subClassOptions.collectAsStateWithLifecycle(emptyList())
-    val gradeOptions by optionsViewModel.gradeOptions.collectAsStateWithLifecycle(emptyList())
-    val subGradeOptions by optionsViewModel.subGradeOptions.collectAsStateWithLifecycle(emptyList())
-    val programOptions by optionsViewModel.programOptions.collectAsStateWithLifecycle(emptyList())
-    val roleOptions by optionsViewModel.roleOptions.collectAsStateWithLifecycle(emptyList())
-
-    // Early exit jika user tidak ditemukan
-    if (user == null) {
-        ErrorStateScreen(
-            title = "Siswa Tidak Ditemukan",
-            message = "Data dengan ID '$studentId' tidak ada di database.",
-            onNavigateBack = onNavigateBack
-        )
-        return
-    }
-
-    // --- FORM STATES (Inisialisasi dari data User) ---
-    var name by remember(user) { mutableStateOf(user.name) }
+    // 3. State Holders
+    // Menggunakan 'derivedStateOf' atau inisialisasi awal agar data tidak hilang saat recompose
+    var name by remember(user) { mutableStateOf(user?.name ?: "") }
     
-    // State Options (Menggunakan Object agar ID tersimpan)
-    var selectedClass by remember(user, classOptions) { 
-        mutableStateOf(classOptions.find { it.id == user.classId || it.name == user.className }) 
+    // Auto-select kelas saat ini dari daftar MasterClass
+    var selectedMasterClass by remember(user, masterClasses) { 
+        mutableStateOf(masterClasses.find { it.className == user?.className }) 
     }
-    var selectedSubClass by remember(user, subClassOptions) { 
-        mutableStateOf(subClassOptions.find { it.id == user.subClassId || it.name == user.subClass }) 
-    }
-    var selectedGrade by remember(user, gradeOptions) { 
-        mutableStateOf(gradeOptions.find { it.id == user.gradeId || it.name == user.grade }) 
-    }
-    var selectedSubGrade by remember(user, subGradeOptions) { 
-        mutableStateOf(subGradeOptions.find { it.id == user.subGradeId || it.name == user.subGrade }) 
-    }
-    var selectedProgram by remember(user, programOptions) {
-        mutableStateOf(programOptions.find { it.id == user.programId || it.name == user.program })
-    }
-    var selectedRole by remember(user, roleOptions) { 
-        mutableStateOf(roleOptions.find { it.id == user.roleId || it.name == user.role }) 
-    }
-
+    
     var embedding by remember { mutableStateOf<FloatArray?>(null) }
     var capturedBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var currentPhotoBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var isProcessing by remember { mutableStateOf(false) }
     var showFaceCapture by remember { mutableStateOf(false) }
 
-    // Load foto lama jika ada
-    LaunchedEffect(user.photoUrl) {
-        user.photoUrl?.let { path ->
-            currentPhotoBitmap = withContext(Dispatchers.IO) { PhotoStorageUtils.loadFacePhoto(path) }
+    // 4. Load Foto Lama di Background
+    LaunchedEffect(user?.photoUrl) {
+        if (user?.photoUrl != null) {
+            currentPhotoBitmap = withContext(Dispatchers.IO) { 
+                PhotoStorageUtils.loadFacePhoto(user.photoUrl) 
+            }
         }
+    }
+
+    // 5. Handle User Tidak Ditemukan (Misal baru dihapus)
+    if (user == null) {
+        ErrorStateScreen(
+            title = "Siswa Tidak Ditemukan", 
+            message = "Data ID '$studentId' tidak ditemukan di database lokal.", 
+            onNavigateBack = onNavigateBack
+        )
+        return
     }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Edit Profil Siswa") },
+                title = { Text("Edit Profil Siswa", fontWeight = FontWeight.Bold) },
                 navigationIcon = { 
                     IconButton(onClick = onNavigateBack) { 
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, null) 
@@ -117,45 +107,49 @@ fun EditUserScreen(
                 },
                 actions = {
                     if (isProcessing) {
-                        CircularProgressIndicator(modifier = Modifier.size(24.dp).padding(end = 16.dp))
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(24.dp).padding(end = 16.dp),
+                            strokeWidth = 2.dp,
+                            color = AzuraPrimary
+                        )
                     } else {
-                        TextButton(onClick = {
+                        IconButton(onClick = {
                             if (name.isNotBlank()) {
                                 isProcessing = true
-                                val updatedUser = user.copy(
-                                    name = name.trim(),
-                                    className = selectedClass?.name ?: user.className,
-                                    classId = selectedClass?.id ?: user.classId,
-                                    subClass = selectedSubClass?.name ?: user.subClass,
-                                    subClassId = selectedSubClass?.id ?: user.subClassId,
-                                    grade = selectedGrade?.name ?: user.grade,
-                                    gradeId = selectedGrade?.id ?: user.gradeId,
-                                    subGrade = selectedSubGrade?.name ?: user.subGrade,
-                                    subGradeId = selectedSubGrade?.id ?: user.subGradeId,
-                                    program = selectedProgram?.name ?: user.program,
-                                    programId = selectedProgram?.id ?: user.programId,
-                                    role = selectedRole?.name ?: user.role,
-                                    roleId = selectedRole?.id ?: user.roleId
-                                )
+                                scope.launch(Dispatchers.IO) {
+                                    try {
+                                        // A. Simpan foto baru jika ada
+                                        val finalPhotoPath = if (capturedBitmap != null) {
+                                            PhotoStorageUtils.saveFacePhoto(context, capturedBitmap!!, studentId) 
+                                        } else {
+                                            user.photoUrl // Pakai foto lama
+                                        }
 
-                                faceViewModel.updateFaceWithPhoto(
-                                    face = updatedUser,
-                                    photoBitmap = capturedBitmap,
-                                    embedding = embedding ?: user.embedding,
-                                    onComplete = {
+                                        // B. Update ke ViewModel (Pastikan fungsi ini ada di FaceViewModel)
+                                        faceViewModel.updateFaceWithPhoto(
+                                            originalFace = user,
+                                            newName = name.trim(),
+                                            newClass = selectedMasterClass, // Kirim object MasterClass
+                                            newPhotoPath = finalPhotoPath,
+                                            newEmbedding = embedding,
+                                            onSuccess = {
+                                                isProcessing = false
+                                                scope.launch(Dispatchers.Main) {
+                                                    Toast.makeText(context, "Profil diperbarui!", Toast.LENGTH_SHORT).show()
+                                                    onUpdateSuccess() 
+                                                }
+                                            }
+                                        )
+                                    } catch (e: Exception) {
                                         isProcessing = false
-                                        context.showToast("Profil diperbarui!")
-                                        onUserUpdated()
-                                        onNavigateBack()
-                                    },
-                                    onError = { msg ->
-                                        isProcessing = false
-                                        context.showToast(msg)
+                                        e.printStackTrace()
                                     }
-                                )
+                                }
+                            } else {
+                                Toast.makeText(context, "Nama tidak boleh kosong!", Toast.LENGTH_SHORT).show()
                             }
                         }) {
-                            Text("Simpan", fontWeight = FontWeight.Bold, color = AzuraPrimary)
+                            Icon(Icons.Default.Check, "Simpan", tint = AzuraPrimary)
                         }
                     }
                 }
@@ -166,60 +160,86 @@ fun EditUserScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(16.dp)
+                .padding(24.dp)
                 .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
-            // --- BAGIAN FOTO (Spesifik Screen Ini) ---
-            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+            // --- PHOTO SECTION ---
+            Box(contentAlignment = Alignment.Center) {
                 val img = capturedBitmap ?: currentPhotoBitmap
                 if (img != null) {
                     Image(
                         bitmap = img.asImageBitmap(),
                         contentDescription = null,
-                        modifier = Modifier.size(120.dp).clip(CircleShape)
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .size(160.dp)
+                            .clip(CircleShape)
+                            .shadow(4.dp, CircleShape)
                     )
                 } else {
-                    Icon(Icons.Default.AccountCircle, null, modifier = Modifier.size(120.dp), tint = Color.LightGray)
+                    Icon(
+                        Icons.Default.AccountCircle, 
+                        contentDescription = null, 
+                        modifier = Modifier.size(160.dp), 
+                        tint = Color.LightGray
+                    )
                 }
                 
-                IconButton(
+                SmallFloatingActionButton(
                     onClick = { showFaceCapture = true },
-                    modifier = Modifier.align(Alignment.BottomCenter).offset(y = 12.dp)
+                    containerColor = AzuraPrimary,
+                    contentColor = Color.White,
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .offset(x = (-4).dp, y = (-4).dp)
                 ) {
-                    Surface(shape = CircleShape, color = AzuraPrimary, shadowElevation = 4.dp) {
-                        Icon(Icons.Default.PhotoCamera, null, tint = Color.White, modifier = Modifier.padding(8.dp))
-                    }
+                    Icon(Icons.Default.PhotoCamera, null, modifier = Modifier.size(20.dp))
                 }
             }
 
-            HorizontalDivider()
-            
-            // --- BAGIAN FORM (Reusable Component) ---
-            // 🚀 Menggantikan puluhan baris kode manual sebelumnya
-            StudentFormBody(
-                name = name, onNameChange = { name = it },
-                selectedClass = selectedClass, onClassChange = { selectedClass = it },
-                selectedSubClass = selectedSubClass, onSubClassChange = { selectedSubClass = it },
-                selectedGrade = selectedGrade, onGradeChange = { selectedGrade = it },
-                selectedSubGrade = selectedSubGrade, onSubGradeChange = { selectedSubGrade = it },
-                selectedProgram = selectedProgram, onProgramChange = { selectedProgram = it },
-                selectedRole = selectedRole, onRoleChange = { selectedRole = it },
-                classOptions = classOptions,
-                subClassOptions = subClassOptions,
-                gradeOptions = gradeOptions,
-                subGradeOptions = subGradeOptions,
-                programOptions = programOptions,
-                roleOptions = roleOptions
+            // --- FORM INPUTS ---
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                label = { Text("Nama Lengkap") },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                singleLine = true
+            )
+
+            // Dropdown Pilihan Kelas
+            MasterClassDropdown(
+                options = masterClasses,
+                selected = selectedMasterClass,
+                onSelect = { selectedMasterClass = it },
+                label = "Pilih Rombel / Kelas"
+            )
+
+            // Info Read-only
+            OutlinedTextField(
+                value = studentId,
+                onValueChange = {},
+                readOnly = true,
+                enabled = false,
+                label = { Text("ID Siswa (Terkunci)") },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    disabledTextColor = Color.Gray,
+                    disabledBorderColor = Color.LightGray
+                )
             )
             
-            Spacer(modifier = Modifier.height(24.dp))
+            if (embedding != null) {
+                Text("✅ Biometrik Wajah Diperbarui", color = Color.Green, style = MaterialTheme.typography.bodySmall)
+            }
         }
 
-        // Overlay Capture Wajah
         if (showFaceCapture) {
             FaceCaptureScreen(
-                mode = CaptureMode.EMBEDDING,
+                mode = CaptureMode.EMBEDDING, // Mengambil Foto + Embedding sekaligus
                 onClose = { showFaceCapture = false },
                 onEmbeddingCaptured = { 
                     embedding = it
@@ -233,12 +253,15 @@ fun EditUserScreen(
 
 @Composable
 fun ErrorStateScreen(title: String, message: String, onNavigateBack: () -> Unit) {
-    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+    Box(modifier = Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(Icons.Default.ErrorOutline, null, tint = Color.Gray, modifier = Modifier.size(64.dp))
-            Text(title, fontWeight = FontWeight.Bold)
-            Text(message, textAlign = TextAlign.Center, modifier = Modifier.padding(16.dp))
-            Button(onClick = onNavigateBack) { Text("Kembali") }
+            Icon(Icons.Default.SearchOff, null, tint = Color.Gray, modifier = Modifier.size(80.dp))
+            Spacer(Modifier.height(16.dp))
+            Text(title, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.headlineSmall)
+            Spacer(Modifier.height(8.dp))
+            Text(message, textAlign = androidx.compose.ui.text.style.TextAlign.Center, color = Color.Gray)
+            Spacer(Modifier.height(24.dp))
+            Button(onClick = onNavigateBack) { Text("KEMBALI") }
         }
     }
 }

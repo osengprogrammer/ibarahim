@@ -7,47 +7,49 @@ import java.time.LocalDateTime
 @Dao
 interface CheckInRecordDao {
 
-    // --- 📝 CRUD STANDAR ---
-
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(record: CheckInRecord): Long 
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(records: List<CheckInRecord>)
 
+    /**
+     * Mengambil semua log absensi.
+     */
+    @Query("SELECT * FROM attendance_records ORDER BY timestamp DESC")
+    fun getAllRecords(): Flow<List<CheckInRecord>>
+
+    /**
+     * Digunakan untuk validasi apakah siswa sudah absen di waktu yang sama.
+     */
+    @Query("SELECT COUNT(*) FROM attendance_records WHERE studentId = :studentId AND timestamp = :timestamp")
+    suspend fun checkIfExist(studentId: String, timestamp: LocalDateTime): Int
+
+    /**
+     * Mencari data dalam rentang waktu tertentu (Filter harian/mingguan).
+     */
+    @Query("SELECT * FROM attendance_records WHERE timestamp BETWEEN :start AND :end")
+    suspend fun getRecordsBetween(start: LocalDateTime, end: LocalDateTime): List<CheckInRecord>
+
+    /**
+     * Mengambil waktu absen terakhir siswa.
+     */
+    @Query("SELECT MAX(timestamp) FROM attendance_records WHERE studentId = :studentId")
+    suspend fun getLastTimestampByStudentId(studentId: String): LocalDateTime?
+
+    /**
+     * ✅ FIX: Menambahkan fungsi updateStatus yang dipanggil oleh ViewModel.
+     * Digunakan untuk mengubah status (Hadir/Sakit/Izin) secara spesifik.
+     */
+    @Query("UPDATE attendance_records SET status = :newStatus WHERE studentId = :studentId AND timestamp = :timestamp")
+    suspend fun updateStatus(studentId: String, timestamp: LocalDateTime, newStatus: String)
+
+    @Query("DELETE FROM attendance_records")
+    suspend fun deleteAll()
+
     @Update
     suspend fun update(record: CheckInRecord)
 
     @Delete
     suspend fun delete(record: CheckInRecord)
-
-    // --- 🛡️ VALIDASI & LOGIC (Anti-Duplicate) ---
-
-    @Query("SELECT COUNT(*) FROM check_in_records WHERE studentId = :studentId AND timestamp = :timestamp")
-    suspend fun checkIfExist(studentId: String, timestamp: LocalDateTime): Int
-
-    @Query("SELECT MAX(timestamp) FROM check_in_records WHERE studentId = :studentId")
-    suspend fun getLastTimestampByStudentId(studentId: String): LocalDateTime?
-
-    // --- 🚀 BATCH OPTIMIZATION (REQUIRED FOR VIEWMODEL) ---
-    // Fungsi ini WAJIB ADA untuk ViewModel 'fetchHistoricalData' dan 'startSmartSync'
-    // Gunanya untuk mengambil data dalam rentang waktu sekaligus (Batch)
-    @Query("SELECT * FROM check_in_records WHERE timestamp BETWEEN :start AND :end")
-    suspend fun getRecordsBetween(start: LocalDateTime, end: LocalDateTime): List<CheckInRecord>
-
-    // --- 🔍 QUERY UTAMA ---
-
-    @Query("SELECT * FROM check_in_records ORDER BY timestamp DESC")
-    fun getAllRecords(): Flow<List<CheckInRecord>>
-
-    @Query("SELECT * FROM check_in_records WHERE status = :status")
-    fun getRecordsByStatus(status: String): Flow<List<CheckInRecord>>
-
-    // --- ⚙️ UTILITAS ---
-
-    @Query("DELETE FROM check_in_records")
-    suspend fun deleteAll()
-
-    @Query("SELECT COUNT(*) FROM check_in_records")
-    suspend fun getCount(): Int
 }

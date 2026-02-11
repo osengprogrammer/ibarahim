@@ -6,6 +6,10 @@ import android.util.Log
 import java.io.BufferedReader
 import java.io.InputStreamReader
 
+/**
+ * 📊 Azura Tech CSV Utility
+ * Standardizes CSV parsing for bulk student and staff registration.
+ */
 object CsvImportUtils {
     private const val TAG = "CsvImportUtils"
     
@@ -47,25 +51,26 @@ object CsvImportUtils {
                         
                         val currentLine = line?.trim() ?: continue
                         if (currentLine.isEmpty()) {
-                            totalRows-- // Don't count empty lines
+                            totalRows-- // Skip empty lines
                             continue
                         }
                         
                         val columns = parseCsvLine(currentLine)
                         
+                        // Handle Header Row
                         if (lineNumber == 1) {
                             headers = columns.map { it.trim().lowercase() }
-                            totalRows-- // Don't count header as data row
+                            totalRows-- 
                             continue
                         }
 
                         if (headers == null) {
-                            errors.add("No headers found")
+                            errors.add("Line $lineNumber: Header CSV tidak ditemukan.")
                             continue
                         }
 
                         if (columns.isEmpty()) {
-                            totalRows-- // Don't count empty lines
+                            totalRows--
                             continue
                         }
                         
@@ -75,16 +80,16 @@ object CsvImportUtils {
                                 students.add(student)
                                 validRows++
                             } else {
-                                errors.add("Line $lineNumber: Failed to parse student data")
+                                errors.add("Baris $lineNumber: Data ID atau Nama kosong.")
                             }
                         } catch (e: Exception) {
-                            errors.add("Line $lineNumber: ${e.message ?: "Parsing error"}")
+                            errors.add("Baris $lineNumber: ${e.message ?: "Kesalahan format data"}")
                         }
                     }
                 }
             }
         } catch (e: Exception) {
-            errors.add("Failed to read CSV file: ${e.message ?: "Unknown error"}")
+            errors.add("Gagal membaca file CSV: ${e.message ?: "Unknown error"}")
         }
         
         return CsvParseResult(
@@ -95,6 +100,9 @@ object CsvImportUtils {
         )
     }
     
+    /**
+     * Parse single CSV line handling quotes and escaped characters (RFC-4180).
+     */
     private fun parseCsvLine(line: String): List<String> {
         val result = mutableListOf<String>()
         val current = StringBuilder()
@@ -105,9 +113,8 @@ object CsvImportUtils {
             when (val char = line[i]) {
                 '"' -> {
                     if (inQuotes && i + 1 < line.length && line[i + 1] == '"') {
-                        // Escaped quote
                         current.append('"')
-                        i++ // Skip next quote
+                        i++ 
                     } else {
                         inQuotes = !inQuotes
                     }
@@ -125,20 +132,20 @@ object CsvImportUtils {
             i++
         }
         
-        // Add the last column
         result.add(current.toString().trim())
         return result
     }
     
+    /**
+     * 🛡️ SURGICAL FIX: Standardizes roles and sanitizes class inputs.
+     */
     private fun parseStudentRow(
         headers: List<String>,
         columns: List<String>,
         lineNumber: Int
     ): CsvStudentData? {
-        // Create header to index mapping
         val headerMap = headers.mapIndexed { index, header -> header to index }.toMap()
         
-        // Helper function to get column value
         fun getValue(headerNames: List<String>): String {
             for (header in headerNames) {
                 headerMap[header]?.takeIf { it < columns.size }?.let { 
@@ -148,23 +155,32 @@ object CsvImportUtils {
             return ""
         }
         
-        // Extract fields
         val studentId = getValue(listOf("studentid", "student_id", "id", "student id", "student"))
         val name = getValue(listOf("name", "fullname", "student_name", "full name"))
         
         if (studentId.isEmpty() || name.isEmpty()) {
             return null
         }
+
+        // 🛡️ ROLE STANDARDIZATION
+        // Maps various human inputs to system constants
+        val rawRole = getValue(listOf("role", "type", "position")).uppercase()
+        val finalRole = when {
+            rawRole.contains("ADMIN") -> "ADMIN"
+            rawRole.contains("TEACH") || rawRole.contains("GURU") -> "TEACHER"
+            else -> "STUDENT" // Default
+        }
         
         return CsvStudentData(
             studentId = studentId,
             name = name,
-            className = getValue(listOf("class", "classname", "class_name", "class name")),
-            subClass = getValue(listOf("subclass", "sub_class", "sub class")),
-            grade = getValue(listOf("grade", "level")),
-            subGrade = getValue(listOf("subgrade", "sub_grade", "sub grade")),
-            program = getValue(listOf("program", "course")),
-            role = getValue(listOf("role", "type", "position")).takeIf { it.isNotEmpty() } ?: "Student",
+            // 🛡️ CLASS SANITIZATION: Trims and normalizes class names to prevent duplication in UI
+            className = getValue(listOf("class", "classname", "class_name", "class name")).trim(),
+            subClass = getValue(listOf("subclass", "sub_class", "sub class")).trim(),
+            grade = getValue(listOf("grade", "level")).trim(),
+            subGrade = getValue(listOf("subgrade", "sub_grade", "sub grade")).trim(),
+            program = getValue(listOf("program", "course")).trim(),
+            role = finalRole,
             photoUrl = getValue(listOf("photo", "photourl", "photo_url", "image", "photo url"))
         )
     }
@@ -172,8 +188,8 @@ object CsvImportUtils {
     fun generateSampleCsv(): String {
         return """
             Student ID,Name,Class,Sub Class,Grade,Sub Grade,Program,Role,Photo URL
-            STU001,John Doe,Class A,Sub A1,Grade 1,Sub 1A,Program X,Student,https://example.com/john.jpg
-            STU002,Jane Smith,Class B,Sub B1,Grade 2,Sub 2A,Program Y,Student,https://example.com/jane.jpg
+            STU001,John Doe,10-IPA-1,IPA,10,1,MIPA,Student,https://example.com/john.jpg
+            STU002,Jane Smith,11-IPS-2,IPS,11,2,SOSHUM,Student,https://example.com/jane.jpg
             TEA001,Mr. Johnson,,,,,,Teacher,https://example.com/teacher.jpg
         """.trimIndent()
     }

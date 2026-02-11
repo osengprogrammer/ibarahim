@@ -1,247 +1,287 @@
-package com.example.crashcourse.ui
+package com.example.crashcourse.ui.face
 
+import androidx.compose.animation.*
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.example.crashcourse.db.*
-import com.example.crashcourse.ui.components.FaceAvatar
-import com.example.crashcourse.ui.components.StudentFormBody
+import com.example.crashcourse.db.MasterClassWithNames
+import com.example.crashcourse.ui.components.* import com.example.crashcourse.ui.management.UserListItem
 import com.example.crashcourse.ui.theme.AzuraPrimary
-import com.example.crashcourse.viewmodel.AuthState
-import com.example.crashcourse.viewmodel.FaceViewModel
-import com.example.crashcourse.viewmodel.OptionsViewModel
-import kotlinx.coroutines.launch
+import com.example.crashcourse.viewmodel.*
+import java.time.LocalDate
 
+/**
+ * 👥 Azura Tech Face List Screen
+ * Screen manajemen personel dengan filter Unit (6-Pilar) dan Sinkronisasi Cerdas.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FaceListScreen(
-    authState: AuthState.Active,
-    faceViewModel: FaceViewModel = viewModel(),
-    optionsViewModel: OptionsViewModel = viewModel(),
-    onEditUser: (FaceEntity) -> Unit = {}
+    onNavigateBack: () -> Unit,
+    onNavigateToEdit: (String) -> Unit,
+    faceVM: FaceViewModel = viewModel(),
+    syncVM: SyncViewModel = viewModel(),
+    masterClassVM: MasterClassViewModel = viewModel()
 ) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    
-    // Master Data
-    val classOptions by optionsViewModel.classOptions.collectAsStateWithLifecycle(emptyList())
-    val subClassOptions by optionsViewModel.subClassOptions.collectAsStateWithLifecycle(emptyList())
-    val gradeOptions by optionsViewModel.gradeOptions.collectAsStateWithLifecycle(emptyList())
-    val subGradeOptions by optionsViewModel.subGradeOptions.collectAsStateWithLifecycle(emptyList())
-    val programOptions by optionsViewModel.programOptions.collectAsStateWithLifecycle(emptyList())
-    val roleOptions by optionsViewModel.roleOptions.collectAsStateWithLifecycle(emptyList())
-    
-    val allFaces by faceViewModel.getScopedFaceList(authState).collectAsStateWithLifecycle(emptyList())
+    // --- 📊 DATA OBSERVATION ---
+    val faces by faceVM.faceList.collectAsStateWithLifecycle()
+    val syncState by syncVM.syncState.collectAsStateWithLifecycle()
+    val masterClasses by masterClassVM.masterClassesWithNames.collectAsStateWithLifecycle(initialValue = emptyList())
+
+    // --- 🔍 FILTER STATES ---
+    var selectedUnit by remember { mutableStateOf<MasterClassWithNames?>(null) }
+    var selectedDate by remember { mutableStateOf<LocalDate?>(null) }
     var searchQuery by remember { mutableStateOf("") }
-    val isAdmin = authState.role == "ADMIN"
 
-    val filteredFaces by remember(allFaces, searchQuery) {
-        derivedStateOf { 
-            allFaces.filter { it.name.contains(searchQuery, ignoreCase = true) } 
+    // --- 🧠 FILTER LOGIC ---
+    val filteredFaces = remember(faces, selectedUnit, searchQuery) {
+        faces.filter { face ->
+            val matchUnit = selectedUnit == null || face.className == selectedUnit?.className
+            val matchSearch = searchQuery.isEmpty() || 
+                             face.name.contains(searchQuery, ignoreCase = true) || 
+                             face.studentId.contains(searchQuery)
+            matchUnit && matchSearch
         }
-    }
-
-    // --- STATE DIALOG ---
-    var editingFace by remember { mutableStateOf<FaceEntity?>(null) }
-    var faceToDelete by remember { mutableStateOf<FaceEntity?>(null) }
-    
-    // State Form Edit
-    var editName by remember { mutableStateOf("") }
-    var selectedClass by remember { mutableStateOf<ClassOption?>(null) }
-    var selectedSubClass by remember { mutableStateOf<SubClassOption?>(null) }
-    var selectedGrade by remember { mutableStateOf<GradeOption?>(null) }
-    var selectedSubGrade by remember { mutableStateOf<SubGradeOption?>(null) }
-    var selectedProgram by remember { mutableStateOf<ProgramOption?>(null) }
-    var selectedRole by remember { mutableStateOf<RoleOption?>(null) }
-
-    // Init data saat dialog dibuka
-    LaunchedEffect(editingFace) {
-        editingFace?.let { face ->
-            editName = face.name
-            selectedClass = classOptions.find { it.id == face.classId || it.name == face.className }
-            selectedSubClass = subClassOptions.find { it.id == face.subClassId || it.name == face.subClass }
-            selectedGrade = gradeOptions.find { it.id == face.gradeId || it.name == face.grade }
-            selectedSubGrade = subGradeOptions.find { it.id == face.subGradeId || it.name == face.subGrade }
-            selectedProgram = programOptions.find { it.id == face.programId || it.name == face.program }
-            selectedRole = roleOptions.find { it.id == face.roleId || it.name == face.role }
-        }
-    }
-
-    // ==========================================
-    // 1. DIALOG KONFIRMASI DELETE
-    // ==========================================
-    if (isAdmin && faceToDelete != null) {
-        val face = faceToDelete!!
-        AlertDialog(
-            onDismissRequest = { faceToDelete = null },
-            title = { Text("Hapus Data Wajah?") },
-            text = { 
-                Text("Apakah Anda yakin ingin menghapus data ${face.name}? Tindakan ini akan menghapus data di Lokal dan Cloud secara permanen.") 
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        faceViewModel.deleteFace(face)
-                        faceToDelete = null
-                    },
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-                ) { Text("Hapus") }
-            },
-            dismissButton = {
-                TextButton(onClick = { faceToDelete = null }) { Text("Batal") }
-            }
-        )
-    }
-
-    // ==========================================
-    // 2. DIALOG UI (Quick Edit Profil)
-    // ==========================================
-    if (isAdmin && editingFace != null) {
-        val face = editingFace!!
-        AlertDialog(
-            onDismissRequest = { editingFace = null },
-            title = { Text("Update Profil Murid", fontWeight = FontWeight.Bold) },
-            text = {
-                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                    StudentFormBody(
-                        name = editName, onNameChange = { editName = it },
-                        selectedClass = selectedClass, onClassChange = { selectedClass = it },
-                        selectedSubClass = selectedSubClass, onSubClassChange = { selectedSubClass = it },
-                        selectedGrade = selectedGrade, onGradeChange = { selectedGrade = it },
-                        selectedSubGrade = selectedSubGrade, onSubGradeChange = { selectedSubGrade = it },
-                        selectedProgram = selectedProgram, onProgramChange = { selectedProgram = it },
-                        selectedRole = selectedRole, onRoleChange = { selectedRole = it },
-                        classOptions = classOptions, subClassOptions = subClassOptions,
-                        gradeOptions = gradeOptions, subGradeOptions = subGradeOptions,
-                        programOptions = programOptions, roleOptions = roleOptions
-                    )
-                }
-            },
-            confirmButton = {
-                Button(onClick = {
-                    faceViewModel.updateFace(
-                        face.copy(
-                            name = editName,
-                            className = selectedClass?.name ?: face.className,
-                            classId = selectedClass?.id ?: face.classId,
-                            subClass = selectedSubClass?.name ?: face.subClass,
-                            subClassId = selectedSubClass?.id ?: face.subClassId,
-                            grade = selectedGrade?.name ?: face.grade,
-                            gradeId = selectedGrade?.id ?: face.gradeId,
-                            subGrade = selectedSubGrade?.name ?: face.subGrade,
-                            subGradeId = selectedSubGrade?.id ?: face.subGradeId,
-                            program = selectedProgram?.name ?: face.program,
-                            programId = selectedProgram?.id ?: face.programId,
-                            role = selectedRole?.name ?: face.role,
-                            roleId = selectedRole?.id ?: face.roleId
-                        )
-                    ) { editingFace = null }
-                }) { Text("Simpan") }
-            },
-            dismissButton = {
-                TextButton(onClick = { editingFace = null }) { Text("Batal") }
-            }
-        )
     }
 
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { 
-                    Column {
-                        Text("Daftar Murid", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                        Text(
-                            text = if (isAdmin) "Akses: Admin" else "Guru: ${authState.email}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary
-                        )
+                    Text("Manajemen Personel", fontWeight = FontWeight.Bold) 
+                },
+                navigationIcon = {
+                    IconButton(onClick = onNavigateBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Kembali")
                     }
                 },
                 actions = {
-                    IconButton(onClick = { 
-                        faceViewModel.syncStudentsWithCloud(authState) 
-                    }) {
-                        Icon(Icons.Default.Refresh, "Sync Cloud")
+                    // 🔄 TOMBOL SYNC
+                    if (syncState is SyncState.Loading) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(24.dp),
+                            strokeWidth = 2.dp,
+                            color = AzuraPrimary
+                        )
+                        Spacer(Modifier.width(16.dp))
+                    } else {
+                        IconButton(onClick = { syncVM.syncStudentsDown() }) {
+                            Icon(
+                                imageVector = Icons.Default.CloudSync, 
+                                contentDescription = "Sync Data", 
+                                tint = AzuraPrimary
+                            )
+                        }
                     }
-                }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = Color.White,
+                    titleContentColor = Color.Black
+                )
             )
         }
     ) { padding ->
-        Column(modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp)) {
-            OutlinedTextField(
-                value = searchQuery,
-                onValueChange = { searchQuery = it },
-                label = { Text("Cari nama...") },
-                modifier = Modifier.fillMaxWidth(),
-                leadingIcon = { Icon(Icons.Default.Search, null) },
-                shape = MaterialTheme.shapes.medium
-            )
-            
-            Spacer(Modifier.height(16.dp))
-
-            LazyColumn(
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(bottom = 20.dp)
+        Column(
+            modifier = Modifier
+                .padding(padding)
+                .fillMaxSize()
+                .background(Color(0xFFF5F5F5)) // Background abu-abu muda khas Azura
+        ) {
+            // --- 🛠️ SECTION: FILTER CARD ---
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
             ) {
-                if (filteredFaces.isEmpty()) {
-                    item {
-                        Box(Modifier.fillParentMaxSize(), contentAlignment = Alignment.Center) {
-                            Text("Tidak ada data murid", color = Color.Gray)
-                        }
-                    }
-                }
+                Column(
+                    modifier = Modifier.padding(16.dp), 
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    // Input Cari (Komponen Azura)
+                    AzuraInput(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        label = "Cari Nama atau ID",
+                        leadingIcon = Icons.Default.Search
+                    )
 
-                // 🚀 PERBAIKAN DI SINI: Ganti it.id menjadi it.studentId
-                items(items = filteredFaces, key = { it.studentId }) { face ->
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                    // Dropdown Unit (Komponen Azura)
+                    AzuraDropdown(
+                        label = "Unit / Kelas",
+                        options = masterClasses,
+                        selected = selectedUnit,
+                        onSelected = { selectedUnit = it },
+                        itemLabel = { it.className }
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(), 
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Row(
-                            modifier = Modifier.padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                        // Date Picker (Komponen Azura)
+                        AzuraDatePicker(
+                            label = "Pilih Tanggal",
+                            selectedDate = selectedDate,
+                            onDateSelected = { selectedDate = it },
+                            modifier = Modifier.weight(1f)
+                        )
+
+                        // Tombol Reset Filter
+                        Surface(
+                            onClick = { 
+                                selectedUnit = null
+                                selectedDate = null
+                                searchQuery = "" 
+                            },
+                            color = Color(0xFFEEEEEE),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.size(56.dp)
                         ) {
-                            FaceAvatar(photoPath = face.photoUrl, size = 56)
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(text = face.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                                Text(
-                                    text = "${face.className} • ${face.grade}", 
-                                    style = MaterialTheme.typography.bodySmall, 
-                                    color = Color.Gray
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.FilterAltOff, 
+                                    contentDescription = "Reset", 
+                                    tint = Color.DarkGray
                                 )
-                            }
-                            if (isAdmin) {
-                                IconButton(onClick = { editingFace = face }) {
-                                    Icon(Icons.Default.Edit, "Edit", tint = AzuraPrimary, modifier = Modifier.size(20.dp))
-                                }
-                                IconButton(onClick = { onEditUser(face) }) {
-                                    Icon(Icons.Default.CameraAlt, "Foto", tint = Color.Gray, modifier = Modifier.size(20.dp))
-                                }
-                                IconButton(onClick = { faceToDelete = face }) {
-                                    Icon(Icons.Default.Delete, "Delete", tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(20.dp))
-                                }
                             }
                         }
                     }
                 }
             }
+
+            // --- 📑 DATA SECTION ---
+            Box(modifier = Modifier.weight(1f)) {
+                // List Personel
+                if (filteredFaces.isEmpty()) {
+                    EmptyFacesView(isFiltering = selectedUnit != null || searchQuery.isNotEmpty())
+                } else {
+                    LazyColumn(
+                        contentPadding = PaddingValues(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        items(filteredFaces, key = { it.studentId }) { face ->
+                            UserListItem(
+                                face = face,
+                                onEdit = { onNavigateToEdit(face.studentId) },
+                                onDelete = { faceVM.deleteFace(face) }
+                            )
+                        }
+                    }
+                }
+
+                // 🚀 SYNC STATUS OVERLAY
+                // Diletakkan dalam BoxScope agar bisa align BottomCenter
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(16.dp), 
+                    contentAlignment = Alignment.BottomCenter
+                ) {
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = syncState !is SyncState.Idle,
+                        enter = fadeIn() + slideInVertically { it },
+                        exit = fadeOut() + slideOutVertically { it }
+                    ) {
+                        SyncStatusCard(
+                            state = syncState, 
+                            onDismiss = { syncVM.resetState() }
+                        )
+                    }
+                }
+            }
         }
+    }
+}
+
+// ==========================================
+// 🎨 HELPER COMPONENT: SYNC STATUS CARD
+// ==========================================
+@Composable
+fun SyncStatusCard(state: SyncState, onDismiss: () -> Unit) {
+    val color = when (state) {
+        is SyncState.Success -> Color(0xFF4CAF50) // Sukses = Hijau
+        is SyncState.Error -> Color(0xFFE53935)   // Error = Merah
+        else -> AzuraPrimary                      // Loading = Biru Azura
+    }
+
+    Surface(
+        color = color,
+        shape = RoundedCornerShape(12.dp),
+        shadowElevation = 8.dp
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            val message = when (state) {
+                is SyncState.Loading -> state.message
+                is SyncState.Success -> state.message
+                is SyncState.Error -> state.message
+                else -> ""
+            }
+            
+            Text(
+                text = message,
+                color = Color.White,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium
+            )
+            
+            Spacer(Modifier.width(12.dp))
+            
+            if (state !is SyncState.Loading) {
+                IconButton(onClick = onDismiss, modifier = Modifier.size(24.dp)) {
+                    Icon(
+                        imageVector = Icons.Default.Close, 
+                        contentDescription = "Tutup", 
+                        tint = Color.White, 
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+// ==========================================
+// 🎨 HELPER COMPONENT: EMPTY VIEW
+// ==========================================
+@Composable
+fun EmptyFacesView(isFiltering: Boolean) {
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Icon(
+            imageVector = if (isFiltering) Icons.Default.SearchOff else Icons.Default.PeopleOutline,
+            contentDescription = null, 
+            modifier = Modifier.size(80.dp), 
+            tint = Color.LightGray
+        )
+        Spacer(Modifier.height(16.dp))
+        Text(
+            text = if (isFiltering) "Pencarian tidak ditemukan" else "Daftar personel masih kosong",
+            style = MaterialTheme.typography.bodyLarge,
+            color = Color.Gray
+        )
     }
 }

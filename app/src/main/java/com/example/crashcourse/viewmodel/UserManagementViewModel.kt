@@ -1,27 +1,19 @@
 package com.example.crashcourse.viewmodel
 
+import android.app.Application
 import android.util.Log
-import androidx.lifecycle.ViewModel
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.crashcourse.utils.Constants // 🚀 Import Constants
-import com.google.firebase.firestore.FirebaseFirestore
+import com.example.crashcourse.db.AppDatabase
+import com.example.crashcourse.firestore.user.FirestoreUser // ✅ NEW IMPORT
+import com.example.crashcourse.firestore.user.UserProfile // ✅ NEW IMPORT
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 
-// 💡 Sebaiknya pindahkan data class ini ke package 'model' jika proyek makin besar
-data class UserProfile(
-    val uid: String = "",
-    val email: String = "",
-    val role: String = "USER", // Default USER
-    val schoolName: String = "",
-    val assignedClasses: List<String> = emptyList()
-)
-
-// State Management agar UI bisa menampilkan Loading/Error
+// State Management
 sealed class UserListState {
     object Idle : UserListState()
     object Loading : UserListState()
@@ -29,11 +21,14 @@ sealed class UserListState {
     data class Error(val message: String) : UserListState()
 }
 
-class UserManagementViewModel : ViewModel() {
+/**
+ * 👥 User Management ViewModel
+ * Handles loading staff list via FirestoreUser Repository.
+ */
+class UserManagementViewModel(application: Application) : AndroidViewModel(application) {
+
+    private val userDao = AppDatabase.getInstance(application).userDao()
     
-    private val db = FirebaseFirestore.getInstance()
-    
-    // Menggunakan State Sealed Class yang lebih informatif
     private val _uiState = MutableStateFlow<UserListState>(UserListState.Idle)
     val uiState = _uiState.asStateFlow()
 
@@ -46,33 +41,34 @@ class UserManagementViewModel : ViewModel() {
             _uiState.value = UserListState.Loading
             
             try {
-                // 🚀 Pindah ke IO Thread untuk Network & Mapping
+                // 1. Ambil Identitas Admin yang sedang Login dari Room
+                val currentAdmin = withContext(Dispatchers.IO) {
+                    userDao.getCurrentUser()
+                }
+
+                if (currentAdmin == null) {
+                    _uiState.value = UserListState.Error("Sesi Admin tidak ditemukan. Silakan login ulang.")
+                    return@launch
+                }
+
+                val mySekolahId = currentAdmin.sekolahId ?: ""
+                Log.d("UserVM", "Mengambil staff untuk sekolah: $mySekolahId")
+
+                // 2. Query Firestore via Repository (FirestoreUser)
                 val userList = withContext(Dispatchers.IO) {
-                    val snapshot = db.collection(Constants.COLL_USERS).get().await()
-                    
-                    snapshot.documents.map { doc ->
-                        // 🛡️ Safe Parsing: Menangani kemungkinan null data
-                        UserProfile(
-                            uid = doc.id,
-                            email = doc.getString("email") ?: "No Email",
-                            role = doc.getString("role") ?: "USER",
-                            schoolName = doc.getString("school_name") ?: "",
-                            
-                            // 🛡️ Safe Casting: Pastikan List tidak crash
-                            assignedClasses = try {
-                                (doc.get("assigned_classes") as? List<*>)?.map { it.toString() } ?: emptyList()
-                            } catch (e: Exception) {
-                                emptyList()
-                            }
-                        )
-                    }
+                    FirestoreUser.fetchUsersBySchool(mySekolahId)
                 }
                 
-                _uiState.value = UserListState.Success(userList)
+                // 3. Update UI State
+                if (userList.isEmpty()) {
+                    _uiState.value = UserListState.Error("Belum ada staff terdaftar.")
+                } else {
+                    _uiState.value = UserListState.Success(userList)
+                }
                 
             } catch (e: Exception) {
                 Log.e("UserVM", "Error fetching users", e)
-                _uiState.value = UserListState.Error(e.message ?: "Gagal mengambil data user")
+                _uiState.value = UserListState.Error("Gagal mengambil data: ${e.message}")
             }
         }
     }
