@@ -7,6 +7,7 @@ import com.example.crashcourse.firestore.core.FirestorePaths
 import com.example.crashcourse.utils.Constants
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.ListenerRegistration
+import com.google.firebase.firestore.Query
 import com.google.firebase.firestore.SetOptions
 import kotlinx.coroutines.tasks.await
 import java.time.LocalDate
@@ -15,9 +16,8 @@ import java.time.ZoneId
 import java.util.Date
 
 /**
- * 📅 FirestoreAttendance (FINAL)
- * Mengelola semua operasi database terkait Absensi (Masuk, Pulang, Izin, Sakit, History).
- * Menggantikan sisa-sisa fungsi di FirestoreHelper.
+ * 📅 FirestoreAttendance (FINAL & OPTIMIZED)
+ * Pusat kendali data absensi di Cloud.
  */
 object FirestoreAttendance {
 
@@ -25,11 +25,10 @@ object FirestoreAttendance {
     private val db = FirestoreCore.db
 
     // ==========================================
-    // 1️⃣ SAVE CHECK-IN (Insert/Update)
+    // 1️⃣ SAVE CHECK-IN
     // ==========================================
     suspend fun saveCheckIn(record: CheckInRecord, sekolahId: String): String? {
         return try {
-            // Generate ID unik berbasis Siswa + Waktu (Menit) agar tidak duplikat
             val timeKey = record.timestamp.toString().replace(Regex("[^0-9]"), "").take(12)
             val docId = "${record.studentId}_$timeKey"
 
@@ -63,22 +62,30 @@ object FirestoreAttendance {
     }
 
     // ==========================================
-    // 2️⃣ FETCH HISTORY (Rekap Absensi)
+    // 2️⃣ FETCH HISTORY (Optimized with Server-side Filter)
     // ==========================================
     suspend fun fetchHistoryRecords(
         sekolahId: String,
         startMillis: Long,
-        endMillis: Long
+        endMillis: Long,
+        className: String? = null // 🚀 Tambahkan parameter opsional
     ): List<CheckInRecord> {
         return try {
             val startTs = Timestamp(Date(startMillis))
             val endTs = Timestamp(Date(endMillis))
 
-            db.collection(FirestorePaths.ATTENDANCE)
+            // Inisialisasi Query Dasar
+            var query: Query = db.collection(FirestorePaths.ATTENDANCE)
                 .whereEqualTo(Constants.KEY_SEKOLAH_ID, sekolahId)
                 .whereGreaterThanOrEqualTo(Constants.FIELD_TIMESTAMP, startTs)
                 .whereLessThanOrEqualTo(Constants.FIELD_TIMESTAMP, endTs)
-                .get()
+
+            // 🚀 SERVER-SIDE FILTER: Jika admin pilih kelas tertentu, filter di Cloud
+            if (!className.isNullOrBlank() && className != "Semua Kelas") {
+                query = query.whereEqualTo(Constants.PILLAR_CLASS, className)
+            }
+
+            query.get()
                 .await()
                 .documents
                 .mapNotNull { doc ->
@@ -86,7 +93,7 @@ object FirestoreAttendance {
                     val time = LocalDateTime.ofInstant(ts.toInstant(), ZoneId.systemDefault())
 
                     CheckInRecord(
-                        id = 0, // ID lokal tidak relevan untuk data cloud
+                        id = 0,
                         studentId = doc.getString(Constants.FIELD_STUDENT_ID) ?: "",
                         name = doc.getString(Constants.KEY_NAME) ?: "Unknown",
                         timestamp = time,
@@ -106,7 +113,7 @@ object FirestoreAttendance {
     }
 
     // ==========================================
-    // 3️⃣ UPDATE STATUS (Edit Manual Guru)
+    // 3️⃣ UPDATE STATUS
     // ==========================================
     suspend fun updateAttendanceStatus(docId: String, newStatus: String) {
         try {
@@ -120,7 +127,7 @@ object FirestoreAttendance {
     }
 
     // ==========================================
-    // 4️⃣ DELETE LOG (Hapus Data Absen)
+    // 4️⃣ DELETE LOG
     // ==========================================
     suspend fun deleteAttendanceLog(firestoreId: String) {
         try {
@@ -134,7 +141,7 @@ object FirestoreAttendance {
     }
 
     // ==========================================
-    // 5️⃣ REALTIME TODAY (Untuk List Harian)
+    // 5️⃣ REALTIME TODAY
     // ==========================================
     fun listenToTodayCheckIns(
         sekolahId: String,
@@ -145,7 +152,12 @@ object FirestoreAttendance {
         return db.collection(FirestorePaths.ATTENDANCE)
             .whereEqualTo(Constants.KEY_SEKOLAH_ID, sekolahId)
             .whereEqualTo(Constants.FIELD_DATE, today)
-            .addSnapshotListener { snapshot, _ ->
+            .addSnapshotListener { snapshot, e ->
+                if (e != null) {
+                    Log.e(TAG, "❌ listenToTodayCheckIns failed", e)
+                    return@addSnapshotListener
+                }
+
                 val records = snapshot?.documents?.mapNotNull { doc ->
                     val ts = doc.getTimestamp(Constants.FIELD_TIMESTAMP)?.toDate() ?: return@mapNotNull null
                     val time = LocalDateTime.ofInstant(ts.toInstant(), ZoneId.systemDefault())

@@ -16,8 +16,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AddPhotoAlternate
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -30,9 +32,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.example.crashcourse.db.MasterClassWithNames // 🚀 FIX: Import dari package DB yang benar
+import com.example.crashcourse.db.MasterClassWithNames
 import com.example.crashcourse.ui.components.*
 import com.example.crashcourse.ui.theme.*
 import com.example.crashcourse.utils.PhotoProcessingUtils
@@ -44,10 +47,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * 🖼️ Azura Tech Gallery Upload Screen
- * Versi 6-Pilar: Mendukung pendaftaran biometrik via galeri dengan metadata lengkap.
+ * 🖼️ Azura Tech Gallery Upload Screen (FIXED)
+ * Mendukung pendaftaran biometrik via galeri dengan multi-rombel/mata kuliah.
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun SingleUploadScreen(
     onNavigateBack: () -> Unit,
@@ -59,10 +62,12 @@ fun SingleUploadScreen(
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
 
-    // --- 📊 MASTER DATA (6-PILAR) ---
+    // --- 📊 MASTER DATA ---
     val masterClasses by masterClassVM.masterClassesWithNames.collectAsStateWithLifecycle(emptyList())
-    // 🚀 FIX: Tipe eksplisit MasterClassWithNames? agar compiler tidak bingung
-    var selectedClass by remember { mutableStateOf<MasterClassWithNames?>(null) }
+    
+    // --- 🚀 MULTI-SELECT STATE ---
+    val selectedRombels = remember { mutableStateListOf<MasterClassWithNames>() }
+    var showRombelDialog by remember { mutableStateOf(false) }
 
     // --- 📝 FORM STATES ---
     var name by remember { mutableStateOf("") }
@@ -73,7 +78,7 @@ fun SingleUploadScreen(
     var isProcessing by remember { mutableStateOf(false) }
     var showSuccessDialog by remember { mutableStateOf(false) }
 
-    // 🖼️ GALLERY LAUNCHER (Ekstraksi Wajah AI)
+    // 🖼️ GALLERY LAUNCHER
     val galleryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri?.let {
             isProcessing = true
@@ -87,23 +92,22 @@ fun SingleUploadScreen(
                         ImageDecoder.decodeBitmap(source).copy(Bitmap.Config.ARGB_8888, true)
                     }
 
-                    // 🧠 AI Processing: Mencari wajah dan mengekstrak embedding
                     val result = PhotoProcessingUtils.processBitmapForFaceEmbedding(context, bmp)
                     
                     withContext(Dispatchers.Main) {
                         if (result != null) {
                             capturedBitmap = result.first
                             embedding = result.second
-                            scope.launch { snackbarHostState.showSnackbar("Wajah terdeteksi & biometrik berhasil diekstrak!") }
+                            snackbarHostState.showSnackbar("Wajah terdeteksi & biometrik berhasil diekstrak!")
                         } else {
-                            scope.launch { snackbarHostState.showSnackbar("Wajah tidak ditemukan! Gunakan foto yang lebih jelas.") }
+                            snackbarHostState.showSnackbar("Wajah tidak ditemukan! Gunakan foto yang lebih jelas.")
                         }
                         isProcessing = false
                     }
                 } catch (e: Exception) {
                     withContext(Dispatchers.Main) {
                         isProcessing = false
-                        scope.launch { snackbarHostState.showSnackbar("Gagal memproses foto: ${e.message}") }
+                        snackbarHostState.showSnackbar("Gagal memproses foto: ${e.message}")
                     }
                 }
             }
@@ -183,15 +187,35 @@ fun SingleUploadScreen(
                 AzuraInput(value = name, onValueChange = { name = it }, label = "Nama Lengkap")
                 AzuraInput(value = studentId, onValueChange = { studentId = it }, label = "Nomor Induk / ID")
 
-                Text("Penempatan Unit", style = MaterialTheme.typography.labelMedium, color = AzuraText.copy(alpha = 0.6f))
+                // 🚀 MULTI-SELECT ROMBEL SECTION
+                Text("Daftar Mata Kuliah / Rombel", style = MaterialTheme.typography.labelMedium, color = AzuraText.copy(alpha = 0.6f))
                 
-                // 🚀 DROPDOWN UNIT RAKITAN
-                MasterClassDropdown(
-                    options = masterClasses,
-                    selected = selectedClass,
-                    onSelect = { selectedClass = it },
-                    label = "Pilih Unit / Departemen"
-                )
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    AssistChip(
+                        onClick = { showRombelDialog = true },
+                        label = { Text("Tambah Matkul") },
+                        leadingIcon = { Icon(Icons.Default.Add, null, Modifier.size(18.dp)) }
+                    )
+
+                    selectedRombels.forEach { rombel ->
+                        InputChip(
+                            selected = true,
+                            onClick = { },
+                            label = { Text(rombel.className) },
+                            trailingIcon = {
+                                Icon(
+                                    Icons.Default.Close, 
+                                    null, 
+                                    Modifier.size(16.dp).clickable { selectedRombels.remove(rombel) }
+                                )
+                            }
+                        )
+                    }
+                }
             }
 
             Spacer(Modifier.height(40.dp))
@@ -204,32 +228,31 @@ fun SingleUploadScreen(
                     val finalName = name.trim()
                     val finalId = studentId.trim()
                     
-                    if (selectedClass == null || embedding == null || finalName.isBlank() || finalId.isBlank()) {
-                        scope.launch { snackbarHostState.showSnackbar("Harap lengkapi semua data dan foto!") }
+                    if (selectedRombels.isEmpty() || embedding == null || finalName.isBlank() || finalId.isBlank()) {
+                        scope.launch { snackbarHostState.showSnackbar("Lengkapi semua data, matkul, dan foto!") }
                         return@AzuraButton
                     }
 
                     isProcessing = true
                     scope.launch(Dispatchers.IO) {
                         try {
-                            // 1. Simpan foto ke storage lokal
                             val path = PhotoStorageUtils.saveFacePhoto(context, capturedBitmap!!, finalId)
                             
                             if (path != null) {
-                                // 2. Registrasi dengan unit rakitan (Membawa Role, Grade, dsb)
-                                viewModel.registerFaceWithUnit(
+                                // 🚀 FIX: Menggunakan registerFaceWithMultiUnit
+                                viewModel.registerFaceWithMultiUnit(
                                     studentId = finalId,
                                     name = finalName,
                                     embedding = embedding!!,
                                     photoUrl = path,
-                                    unit = selectedClass!!, 
+                                    units = selectedRombels.toList(), // Menerima List
                                     onSuccess = {
                                         scope.launch(Dispatchers.Main) {
                                             isProcessing = false
                                             showSuccessDialog = true
                                         }
                                     },
-                                    onDuplicate = { dupId ->
+                                    onDuplicate = { dupId: String -> // Tipe eksplisit ditambahkan
                                         scope.launch(Dispatchers.Main) {
                                             isProcessing = false
                                             snackbarHostState.showSnackbar("ID $dupId sudah digunakan!")
@@ -240,10 +263,24 @@ fun SingleUploadScreen(
                         } catch (e: Exception) {
                             withContext(Dispatchers.Main) {
                                 isProcessing = false
-                                scope.launch { snackbarHostState.showSnackbar("Error: ${e.message}") }
+                                snackbarHostState.showSnackbar("Error: ${e.message}")
                             }
                         }
                     }
+                }
+            )
+        }
+
+        // --- 🚀 ROMBEL SELECTION DIALOG ---
+        if (showRombelDialog) {
+            RombelSelectionDialog(
+                allClasses = masterClasses,
+                alreadySelected = selectedRombels,
+                onDismiss = { showRombelDialog = false },
+                onSave = { newSelection ->
+                    selectedRombels.clear()
+                    selectedRombels.addAll(newSelection)
+                    showRombelDialog = false
                 }
             )
         }
@@ -254,7 +291,7 @@ fun SingleUploadScreen(
                 onDismissRequest = { },
                 icon = { Icon(Icons.Default.CheckCircle, null, tint = AzuraSuccess, modifier = Modifier.size(64.dp)) },
                 title = { Text("Registrasi Berhasil", fontWeight = FontWeight.Bold) },
-                text = { Text("Personel $name telah didaftarkan pada unit ${selectedClass?.className}.") },
+                text = { Text("Personel $name telah didaftarkan pada ${selectedRombels.size} mata kuliah.") },
                 confirmButton = { 
                     AzuraButton(
                         text = "Selesai", 

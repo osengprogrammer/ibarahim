@@ -1,6 +1,7 @@
 package com.example.crashcourse.ui.options
 
 import android.widget.Toast
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -20,12 +21,13 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.crashcourse.ui.OptionsHelpers
+import com.example.crashcourse.ui.components.AzuraInput // ✅ Pastikan import komponen Azura
 import com.example.crashcourse.viewmodel.OptionsViewModel
 import com.example.crashcourse.db.*
 
 /**
  * 🛠️ Azura Tech Options Management
- * Handles hierarchical data (Parent-Child) for School Categories.
+ * Versi Teroptimasi: Local Search + Incremental Sync Trigger
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -41,6 +43,9 @@ fun OptionsManagementScreen(
     var selectedType by remember { mutableStateOf(optionTypes[0]) }
     var typeExpanded by remember { mutableStateOf(false) }
 
+    // --- 🔍 FILTER & SEARCH STATE ---
+    var searchQuery by remember { mutableStateOf("") }
+
     // --- 📊 DATA OBSERVATION ---
     val classOptions by viewModel.classOptions.collectAsStateWithLifecycle()
     val subClassOptions by viewModel.subClassOptions.collectAsStateWithLifecycle()
@@ -49,8 +54,8 @@ fun OptionsManagementScreen(
     val programOptions by viewModel.programOptions.collectAsStateWithLifecycle()
     val roleOptions by viewModel.roleOptions.collectAsStateWithLifecycle()
 
-    // Determinasi list mana yang ditampilkan & siapa parent-nya
-    val currentList = when (selectedType) {
+    // Determinasi list mana yang ditampilkan
+    val rawList = when (selectedType) {
         "Class" -> classOptions
         "SubClass" -> subClassOptions
         "Grade" -> gradeOptions
@@ -60,6 +65,13 @@ fun OptionsManagementScreen(
         else -> emptyList()
     }
     
+    // 🧠 LOGIKA FILTER LOKAL (Sangat Cepat di Memori)
+    val filteredList = remember(rawList, searchQuery) {
+        rawList.filter { item ->
+            OptionsHelpers.getName(item).contains(searchQuery, ignoreCase = true)
+        }
+    }
+
     val potentialParents = when (selectedType) {
         "SubClass" -> classOptions
         "SubGrade" -> gradeOptions
@@ -72,27 +84,51 @@ fun OptionsManagementScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Kamus Master", fontWeight = FontWeight.Bold) },
+                title = { 
+                    Column {
+                        Text("Kamus Master", fontWeight = FontWeight.Bold)
+                        Text(
+                            text = if (isSyncing) "Sinkronisasi..." else "Data Lokal",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (isSyncing) MaterialTheme.colorScheme.primary else Color.Gray
+                        )
+                    }
+                },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null) }
                 },
                 actions = {
-                    IconButton(onClick = { viewModel.syncAllFromCloud() }, enabled = !isSyncing) {
-                        if (isSyncing) CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
-                        else Icon(Icons.Default.CloudDownload, "Sync Cloud")
+                    IconButton(
+                        onClick = { viewModel.syncAllFromCloud() }, 
+                        enabled = !isSyncing
+                    ) {
+                        if (isSyncing) {
+                            CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+                        } else {
+                            Icon(Icons.Default.CloudDownload, "Sync Incremental")
+                        }
                     }
                 }
             )
         },
         floatingActionButton = {
-            FloatingActionButton(onClick = { showAddDialog = true }, containerColor = MaterialTheme.colorScheme.primary) {
+            FloatingActionButton(
+                onClick = { showAddDialog = true }, 
+                containerColor = MaterialTheme.colorScheme.primary
+            ) {
                 Icon(Icons.Default.Add, null, tint = Color.White)
             }
         }
     ) { padding ->
-        Column(modifier = Modifier.padding(padding).fillMaxSize().padding(16.dp)) {
+        Column(
+            modifier = Modifier
+                .padding(padding)
+                .fillMaxSize()
+                .background(Color(0xFFF8F9FA)) // Background bersih Azura
+                .padding(16.dp)
+        ) {
             
-            // --- 🎯 CATEGORY PICKER ---
+            // --- 🎯 1. CATEGORY PICKER ---
             ExposedDropdownMenuBox(
                 expanded = typeExpanded,
                 onExpandedChange = { typeExpanded = !typeExpanded },
@@ -102,7 +138,7 @@ fun OptionsManagementScreen(
                     value = selectedType,
                     onValueChange = {},
                     readOnly = true,
-                    label = { Text("Kategori Data") },
+                    label = { Text("Pilih Pilar Data") },
                     trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(typeExpanded) },
                     modifier = Modifier.menuAnchor().fillMaxWidth(),
                     shape = RoundedCornerShape(12.dp)
@@ -111,31 +147,58 @@ fun OptionsManagementScreen(
                     optionTypes.forEach { type ->
                         DropdownMenuItem(
                             text = { Text(type) },
-                            onClick = { selectedType = type; typeExpanded = false }
+                            onClick = { 
+                                selectedType = type 
+                                searchQuery = "" // Reset cari saat ganti kategori
+                                typeExpanded = false 
+                            }
                         )
                     }
                 }
             }
 
-            Spacer(Modifier.height(20.dp))
+            Spacer(Modifier.height(12.dp))
 
-            // --- 📜 LIST VIEW ---
-            LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                items(currentList, key = { OptionsHelpers.getId(it) }) { item ->
-                    ExpandableOptionCard(
-                        option = item,
-                        parentOptions = potentialParents,
-                        onUpdate = { updated ->
-                            viewModel.updateOption(
-                                type = selectedType,
-                                option = updated,
-                                name = OptionsHelpers.getName(updated),
-                                order = OptionsHelpers.getOrder(updated),
-                                parentId = OptionsHelpers.getParentId(updated)
-                            )
-                        },
-                        onDelete = { viewModel.deleteOption(selectedType, it) }
+            // --- 🔍 2. SEARCH BAR ---
+            AzuraInput(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                label = "Cari di Kamus $selectedType",
+                leadingIcon = Icons.Default.Search
+            )
+
+            Spacer(Modifier.height(16.dp))
+
+            // --- 📜 3. FILTERED LIST VIEW ---
+            if (filteredList.isEmpty()) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(
+                        text = if (searchQuery.isEmpty()) "Data kosong" else "Pencarian tidak ditemukan",
+                        color = Color.Gray
                     )
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.weight(1f), 
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    contentPadding = PaddingValues(bottom = 80.dp) // Beri ruang untuk FAB
+                ) {
+                    items(filteredList, key = { OptionsHelpers.getId(it) }) { item ->
+                        ExpandableOptionCard(
+                            option = item,
+                            parentOptions = potentialParents,
+                            onUpdate = { updated ->
+                                viewModel.updateOption(
+                                    type = selectedType,
+                                    option = updated,
+                                    name = OptionsHelpers.getName(updated),
+                                    order = OptionsHelpers.getOrder(updated),
+                                    parentId = OptionsHelpers.getParentId(updated)
+                                )
+                            },
+                            onDelete = { viewModel.deleteOption(selectedType, it) }
+                        )
+                    }
                 }
             }
         }
@@ -153,6 +216,8 @@ fun OptionsManagementScreen(
         )
     }
 }
+
+// ... Component ExpandableOptionCard, OptionAddDialog, dan ParentPicker tetap sama ...
 
 /**
  * 📝 CARD: Expandable for quick editing

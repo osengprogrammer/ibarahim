@@ -46,6 +46,7 @@ import java.util.*
 fun CheckInScreen(
     useBackCamera: Boolean,
     faceViewModel: FaceViewModel = viewModel(),
+    activeSession: String, // 🚀 Terima kiriman dari Dashboard
     authViewModel: AuthViewModel = viewModel()
 ) {
     val context = LocalContext.current
@@ -242,7 +243,10 @@ fun CheckInScreen(
                                 checkInTimestamps[bestName] = now
                                 
                                 // Panggil ViewModel untuk simpan ke Room & Firestore
-                                faceViewModel.saveCheckInByName(bestName) 
+                                faceViewModel.saveCheckInWithSession(
+            name = bestName,
+            activeSession = activeSession // 👈 Gunakan sesi dari Dashboard
+        )
                                 
                                 matchName = bestName
                                 alreadyCheckedIn = false
@@ -394,6 +398,14 @@ fun CheckInScreen(
                                     color = Color.White,
                                     fontWeight = FontWeight.Bold
                                 )
+
+                                // --- 🚀 TAMBAHAN: NAMA ROMBEL/SESI ---
+                Text(
+                    text = activeSession, // Menampilkan Rombel yang dipilih dari Dashboard
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = AzuraAccent, // Gunakan warna aksen agar beda dengan nama
+                    fontWeight = FontWeight.SemiBold
+                )
                                 if (alreadyCheckedIn) {
                                     Text(
                                         text = "Dapat absen lagi dalam ${cooldownSeconds}s",

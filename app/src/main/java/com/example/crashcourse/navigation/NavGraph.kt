@@ -1,15 +1,18 @@
 package com.example.crashcourse.navigation
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
+import androidx.lifecycle.viewmodel.compose.viewModel 
 
 // 🚀 CORE SCREENS
 import com.example.crashcourse.ui.MainScreen
 import com.example.crashcourse.ui.AdminDashboardScreen
+import com.example.crashcourse.ui.ProfileScreen
 import com.example.crashcourse.ui.auth.LoginScreen
 import com.example.crashcourse.ui.auth.RegisterScreen
 import com.example.crashcourse.ui.auth.StatusWaitingScreen
@@ -19,155 +22,192 @@ import com.example.crashcourse.ui.add.SingleUploadScreen
 import com.example.crashcourse.ui.add.BulkRegistrationScreen
 import com.example.crashcourse.ui.edit.EditUserScreen
 import com.example.crashcourse.ui.checkin.CheckInScreen
+import com.example.crashcourse.ui.checkin.CheckInRecordScreen
 import com.example.crashcourse.ui.options.OptionsManagementScreen
 import com.example.crashcourse.ui.options.MasterClassManagementScreen
 import com.example.crashcourse.ui.monitor.LiveMonitorScreen 
 import com.example.crashcourse.ui.management.UserManagementScreen
-import com.example.crashcourse.ui.face.FaceListScreen // ✅ IMPORT WAJIB
+import com.example.crashcourse.ui.face.FaceListScreen
+import com.example.crashcourse.ui.EditUserScopeScreen 
+import com.example.crashcourse.LoadingScreen 
 
 // 🚀 VIEWMODELS & STATES
 import com.example.crashcourse.viewmodel.AuthState
+import com.example.crashcourse.viewmodel.AuthViewModel
+import com.example.crashcourse.viewmodel.RegisterViewModel
 
-/**
- * 🗺️ Azura Tech Central NavGraph
- * Menghubungkan semua rute (String) ke Layar (Composable).
- */
 @Composable
 fun NavGraph(
     navController: NavHostController, 
-    authState: AuthState
+    authState: AuthState,
+    viewModel: AuthViewModel, 
+    onLogoutRequest: () -> Unit
 ) {
-    // Tentukan layar awal berdasarkan status login
-    val startDest = when (authState) {
-        is AuthState.Active -> Screen.Main.route
-        is AuthState.StatusWaiting -> Screen.StatusWaiting.route
-        else -> Screen.Login.route
+    // 🎯 1. GLOBAL SECURITY OBSERVER
+    LaunchedEffect(authState) {
+        when (authState) {
+            is AuthState.LoggedOut -> {
+                navController.navigate(Screen.Login.route) {
+                    popUpTo(0) { inclusive = true }
+                }
+            }
+            is AuthState.StatusWaiting -> {
+                navController.navigate(Screen.StatusWaiting.route) {
+                    popUpTo(0)
+                }
+            }
+            else -> {} 
+        }
     }
 
     
 
-    NavHost(navController = navController, startDestination = startDest) {
+    // 🎯 2. SETUP NAVHOST
+    NavHost(
+        navController = navController, 
+        startDestination = Screen.Login.route 
+    ) {
         
         // ==========================================
-        // 🔐 1. AUTHENTICATION ROUTES
+        // 🔐 AUTH ROUTES
         // ==========================================
+        
         composable(Screen.Login.route) {
-            LoginScreen(
-                onNavigateToRegister = { navController.navigate(Screen.Register.route) },
-                onLoginSuccess = { 
+            LaunchedEffect(authState) {
+                if (authState is AuthState.Active) {
                     navController.navigate(Screen.Main.route) {
                         popUpTo(Screen.Login.route) { inclusive = true }
                     }
                 }
-            )
+            }
+
+            if (authState is AuthState.Active) {
+                LoadingScreen("Mengalihkan ke Dashboard...")
+            } else {
+                LoginScreen(
+                    onNavigateToRegister = { navController.navigate(Screen.Register.route) },
+                    viewModel = viewModel
+                )
+            }
         }
         
         composable(Screen.Register.route) {
+            LaunchedEffect(authState) {
+                if (authState is AuthState.Active) {
+                    navController.navigate(Screen.Main.route) {
+                        popUpTo(Screen.Register.route) { inclusive = true }
+                    }
+                }
+            }
+
             RegisterScreen(
-                onNavigateToLogin = { navController.navigate(Screen.Login.route) }
+                onNavigateToLogin = { navController.navigate(Screen.Login.route) },
+                viewModel = viewModel 
             )
         }
         
         composable(Screen.StatusWaiting.route) { 
-            StatusWaitingScreen() 
+            StatusWaitingScreen(viewModel = viewModel) 
         }
 
         // ==========================================
-        // 🏠 2. ACTIVE SESSION ROUTES (Hanya jika Login)
+        // 🏠 ACTIVE ROUTES
         // ==========================================
-        if (authState is AuthState.Active) {
-            
-            composable(Screen.Main.route) {
-                MainScreen(
-                    authState = authState,
-                    onNavigateToCheckIn = { navController.navigate(Screen.CheckIn.route) },
-                    onNavigateToAdmin = { navController.navigate(Screen.Admin.route) }
-                )
+        
+        composable(Screen.Main.route) {
+            when (authState) {
+                is AuthState.Active -> {
+                    MainScreen(
+                        authState = authState,
+                        // ✅ MODIFIKASI: Sekarang navigasi CheckIn butuh konteks sesi
+                        onNavigateToCheckIn = { 
+                            // Jika di Main sudah ada pilihan kelas, kirim namanya
+                            // Untuk sementara default "General" atau rute dinamis
+                            navController.navigate("checkin_screen/General Session") 
+                        },
+                        onNavigateToAdmin = { navController.navigate(Screen.Admin.route) },
+                        onLogoutRequest = onLogoutRequest
+                    )
+                }
+                is AuthState.Loading -> LoadingScreen(authState.message)
+                is AuthState.Checking -> LoadingScreen("Memverifikasi data...")
+                else -> LoadingScreen("Sinkronisasi Cloud...")
             }
+        }
 
-            composable(Screen.CheckIn.route) { 
-                CheckInScreen(useBackCamera = true) 
-            }
-            
-            composable(Screen.Admin.route) { 
-                AdminDashboardScreen(navController = navController) 
-            }
-            
-            composable(Screen.Options.route) { 
-                OptionsManagementScreen(onNavigateBack = { navController.popBackStack() }) 
-            }
+        composable(Screen.Profile.route) { 
+            if (authState is AuthState.Active) {
+                ProfileScreen(authState, { onLogoutRequest() }, { navController.popBackStack() })
+            } else { LoadingScreen() }
+        }
 
-            composable(Screen.MasterClass.route) { 
-                MasterClassManagementScreen(onNavigateBack = { navController.popBackStack() }) 
-            }
+        // ✅ FIX: CHECK-IN DENGAN ARGUMENT (MANY-TO-MANY)
+        composable(
+            route = "checkin_screen/{sessionName}",
+            arguments = listOf(navArgument("sessionName") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val sessionName = backStackEntry.arguments?.getString("sessionName") ?: "General"
+            CheckInScreen(
+                useBackCamera = true,
+                activeSession = sessionName // 🚀 Kirim ke Screen
+            )
+        }
+        
+        composable(Screen.Admin.route) { 
+            if (authState is AuthState.Active) AdminDashboardScreen(navController, authState) else LoadingScreen() 
+        }
+        
+        composable(Screen.Options.route) { 
+            if (authState is AuthState.Active) OptionsManagementScreen({ navController.popBackStack() }) else LoadingScreen() 
+        }
 
-            composable(Screen.LiveMonitor.route) { 
-                LiveMonitorScreen(onBack = { navController.popBackStack() }) 
-            }
+        composable(Screen.MasterClass.route) { 
+            if (authState is AuthState.Active) MasterClassManagementScreen({ navController.popBackStack() }) else LoadingScreen() 
+        }
 
-            // 🚀 FACE MANAGEMENT (Rute yang tadi Error)
-            composable(Screen.FaceList.route) {
-                FaceListScreen(
-                    onNavigateBack = { navController.popBackStack() },
-                    onNavigateToEdit = { id -> 
-                        navController.navigate(Screen.EditUser.createRoute(id)) 
-                    }
-                )
-            }
+        composable(Screen.LiveMonitor.route) { 
+            if (authState is AuthState.Active) LiveMonitorScreen({ navController.popBackStack() }) else LoadingScreen() 
+        }
 
-            // --- 📝 REGISTRATION FLOW ---
-            composable(Screen.RegistrationMenu.route) {
-                RegistrationMenuScreen(
-                    onNavigateToSingleAdd = { navController.navigate(Screen.Add.route) },
-                    onNavigateToBulk = { navController.navigate(Screen.Bulk.route) },
-                    onNavigateToGallery = { navController.navigate(Screen.SingleUpload.route) },
-                    onBack = { navController.popBackStack() }
-                )
-            }
-            
-            composable(Screen.Add.route) {
-                AddUserScreen(
-                    onNavigateBack = { navController.popBackStack() },
-                    onUpdateSuccess = { navController.popBackStack() } 
-                )
-            }
+        composable(Screen.History.route) {
+            if (authState is AuthState.Active) CheckInRecordScreen(authState, { navController.popBackStack() }) else LoadingScreen() 
+        }
 
-            composable(Screen.Bulk.route) { 
-                BulkRegistrationScreen(onNavigateBack = { navController.popBackStack() }) 
-            }
-            
-            composable(Screen.SingleUpload.route) { 
-                SingleUploadScreen(
-                    onNavigateBack = { navController.popBackStack() }, 
-                    onUpdateSuccess = { navController.popBackStack() }
-                ) 
-            }
+        composable(Screen.FaceList.route) {
+            if (authState is AuthState.Active) FaceListScreen({ navController.popBackStack() }, { id -> navController.navigate(Screen.EditUser.createRoute(id)) }) else LoadingScreen() 
+        }
 
-            // --- 👥 USER MANAGEMENT ---
-            composable(Screen.UserManagement.route) {
-                UserManagementScreen(
-                    onBack = { navController.popBackStack() },
-                    onEditUser = { id -> navController.navigate(Screen.EditUser.createRoute(id)) }
-                )
-            }
-            
-            // --- ✏️ DYNAMIC EDIT SCREEN ---
-            composable(
-                route = Screen.EditUser.route,
-                arguments = listOf(
-                    navArgument("userId") { 
-                        type = NavType.StringType 
-                        nullable = false
-                    }
-                )
-            ) { backStackEntry ->
-                val userId = backStackEntry.arguments?.getString("userId") ?: ""
-                EditUserScreen(
-                    studentId = userId,
-                    onNavigateBack = { navController.popBackStack() },
-                    onUpdateSuccess = { navController.popBackStack() }
-                )
-            }
+        composable(Screen.RegistrationMenu.route) {
+            if (authState is AuthState.Active) RegistrationMenuScreen({ navController.navigate(Screen.Add.route) }, { navController.navigate(Screen.Bulk.route) }, { navController.navigate(Screen.SingleUpload.route) }, { navController.popBackStack() }) else LoadingScreen() 
+        }
+        
+        composable(Screen.Add.route) { AddUserScreen({ navController.popBackStack() }, { navController.popBackStack() }) }
+
+        composable(Screen.Bulk.route) { 
+            val registerViewModel: RegisterViewModel = viewModel()
+            BulkRegistrationScreen(registerViewModel, { navController.popBackStack() }) 
+        }
+        
+        composable(Screen.SingleUpload.route) { SingleUploadScreen({ navController.popBackStack() }, { navController.popBackStack() }) }
+
+        composable(Screen.UserManagement.route) {
+            if (authState is AuthState.Active) UserManagementScreen(authState, { navController.popBackStack() }, { id -> navController.navigate(Screen.EditUserScope.createRoute(id)) }) else LoadingScreen() 
+        }
+
+        composable(
+            route = Screen.EditUserScope.route, 
+            arguments = listOf(navArgument("userId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val userId = backStackEntry.arguments?.getString("userId") ?: ""
+            if (authState is AuthState.Active) EditUserScopeScreen(userId, authState, { navController.popBackStack() }) else LoadingScreen() 
+        }
+        
+        composable(
+            route = Screen.EditUser.route,
+            arguments = listOf(navArgument("userId") { type = NavType.StringType; nullable = false })
+        ) { backStackEntry ->
+            val userId = backStackEntry.arguments?.getString("userId") ?: ""
+            EditUserScreen(userId, { navController.popBackStack() }, { navController.popBackStack() })
         }
     }
 }

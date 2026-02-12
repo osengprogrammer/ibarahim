@@ -3,6 +3,7 @@ package com.example.crashcourse.ui.edit
 import android.graphics.Bitmap
 import android.widget.Toast
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -23,12 +24,13 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.crashcourse.db.MasterClassWithNames
 import com.example.crashcourse.ui.add.CaptureMode
 import com.example.crashcourse.ui.add.FaceCaptureScreen
-import com.example.crashcourse.ui.components.MasterClassDropdown
+import com.example.crashcourse.ui.components.RombelSelectionDialog
 import com.example.crashcourse.ui.theme.AzuraPrimary
 import com.example.crashcourse.utils.PhotoStorageUtils
 import com.example.crashcourse.viewmodel.FaceViewModel
@@ -37,11 +39,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/**
- * ✏️ Azura Tech Edit User Screen (FIXED)
- * Mengelola pembaruan profil biometrik, foto, dan perpindahan kelas.
- */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun EditUserScreen(
     studentId: String,
@@ -53,22 +51,24 @@ fun EditUserScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     
-    // 1. Data Observation
     val allFacesState by faceViewModel.faceList.collectAsStateWithLifecycle()
     val masterClasses by masterClassViewModel.masterClassesWithNames.collectAsStateWithLifecycle(initialValue = emptyList())
     
-    // 2. Cari User berdasarkan ID
     val user = remember(allFacesState, studentId) { 
         allFacesState.find { it.studentId == studentId } 
     }
 
-    // 3. State Holders
-    // Menggunakan 'derivedStateOf' atau inisialisasi awal agar data tidak hilang saat recompose
     var name by remember(user) { mutableStateOf(user?.name ?: "") }
-    
-    // Auto-select kelas saat ini dari daftar MasterClass
-    var selectedMasterClass by remember(user, masterClasses) { 
-        mutableStateOf(masterClasses.find { it.className == user?.className }) 
+    val selectedRombels = remember { mutableStateListOf<MasterClassWithNames>() }
+    var showRombelDialog by remember { mutableStateOf(false) }
+
+    // Memastikan data kelas lama ter-load ke Chips
+    LaunchedEffect(user, masterClasses) {
+        if (user != null && masterClasses.isNotEmpty() && selectedRombels.isEmpty()) {
+            val currentNames = user.className.split(",").map { it.trim() }
+            val matched = masterClasses.filter { it.className in currentNames }
+            selectedRombels.addAll(matched)
+        }
     }
     
     var embedding by remember { mutableStateOf<FloatArray?>(null) }
@@ -77,7 +77,6 @@ fun EditUserScreen(
     var isProcessing by remember { mutableStateOf(false) }
     var showFaceCapture by remember { mutableStateOf(false) }
 
-    // 4. Load Foto Lama di Background
     LaunchedEffect(user?.photoUrl) {
         if (user?.photoUrl != null) {
             currentPhotoBitmap = withContext(Dispatchers.IO) { 
@@ -86,56 +85,42 @@ fun EditUserScreen(
         }
     }
 
-    // 5. Handle User Tidak Ditemukan (Misal baru dihapus)
     if (user == null) {
-        ErrorStateScreen(
-            title = "Siswa Tidak Ditemukan", 
-            message = "Data ID '$studentId' tidak ditemukan di database lokal.", 
-            onNavigateBack = onNavigateBack
-        )
+        ErrorStateScreen("User Tidak Ditemukan", "Data dengan ID $studentId tidak tersedia.", onNavigateBack)
         return
     }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Edit Profil Siswa", fontWeight = FontWeight.Bold) },
+                title = { Text("Edit Profil", fontWeight = FontWeight.Bold) },
                 navigationIcon = { 
-                    IconButton(onClick = onNavigateBack) { 
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, null) 
-                    } 
+                    IconButton(onClick = onNavigateBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null) } 
                 },
                 actions = {
                     if (isProcessing) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(24.dp).padding(end = 16.dp),
-                            strokeWidth = 2.dp,
-                            color = AzuraPrimary
-                        )
+                        CircularProgressIndicator(modifier = Modifier.size(24.dp).padding(end = 16.dp), color = AzuraPrimary)
                     } else {
                         IconButton(onClick = {
-                            if (name.isNotBlank()) {
+                            if (name.isNotBlank() && selectedRombels.isNotEmpty()) {
                                 isProcessing = true
                                 scope.launch(Dispatchers.IO) {
                                     try {
-                                        // A. Simpan foto baru jika ada
                                         val finalPhotoPath = if (capturedBitmap != null) {
                                             PhotoStorageUtils.saveFacePhoto(context, capturedBitmap!!, studentId) 
-                                        } else {
-                                            user.photoUrl // Pakai foto lama
-                                        }
+                                        } else user.photoUrl
 
-                                        // B. Update ke ViewModel (Pastikan fungsi ini ada di FaceViewModel)
-                                        faceViewModel.updateFaceWithPhoto(
+                                        // 🔥 PERBAIKAN: Gunakan fungsi baru 'updateFaceWithMultiUnit'
+                                        faceViewModel.updateFaceWithMultiUnit(
                                             originalFace = user,
                                             newName = name.trim(),
-                                            newClass = selectedMasterClass, // Kirim object MasterClass
+                                            newUnits = selectedRombels.toList(), // Kirim sebagai List
                                             newPhotoPath = finalPhotoPath,
                                             newEmbedding = embedding,
                                             onSuccess = {
                                                 isProcessing = false
                                                 scope.launch(Dispatchers.Main) {
-                                                    Toast.makeText(context, "Profil diperbarui!", Toast.LENGTH_SHORT).show()
+                                                    Toast.makeText(context, "Data diperbarui!", Toast.LENGTH_SHORT).show()
                                                     onUpdateSuccess() 
                                                 }
                                             }
@@ -146,7 +131,7 @@ fun EditUserScreen(
                                     }
                                 }
                             } else {
-                                Toast.makeText(context, "Nama tidak boleh kosong!", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Lengkapi Nama & Matkul!", Toast.LENGTH_SHORT).show()
                             }
                         }) {
                             Icon(Icons.Default.Check, "Simpan", tint = AzuraPrimary)
@@ -173,78 +158,79 @@ fun EditUserScreen(
                         bitmap = img.asImageBitmap(),
                         contentDescription = null,
                         contentScale = ContentScale.Crop,
-                        modifier = Modifier
-                            .size(160.dp)
-                            .clip(CircleShape)
-                            .shadow(4.dp, CircleShape)
+                        modifier = Modifier.size(160.dp).clip(CircleShape).shadow(4.dp, CircleShape)
                     )
                 } else {
-                    Icon(
-                        Icons.Default.AccountCircle, 
-                        contentDescription = null, 
-                        modifier = Modifier.size(160.dp), 
-                        tint = Color.LightGray
-                    )
+                    Icon(Icons.Default.AccountCircle, null, Modifier.size(160.dp), tint = Color.LightGray)
                 }
-                
                 SmallFloatingActionButton(
                     onClick = { showFaceCapture = true },
                     containerColor = AzuraPrimary,
-                    contentColor = Color.White,
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .offset(x = (-4).dp, y = (-4).dp)
+                    modifier = Modifier.align(Alignment.BottomEnd).offset((-4).dp, (-4).dp)
+                ) { Icon(Icons.Default.PhotoCamera, null, Modifier.size(20.dp)) }
+            }
+
+            // --- INPUT NAMA ---
+            OutlinedTextField(
+                value = name, onValueChange = { name = it },
+                label = { Text("Nama Lengkap") },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp)
+            )
+
+            // --- MULTI-SELECT CHIPS ---
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text("Mata Kuliah / Rombel Terdaftar", style = MaterialTheme.typography.labelMedium, color = Color.Gray)
+                Spacer(Modifier.height(8.dp))
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Icon(Icons.Default.PhotoCamera, null, modifier = Modifier.size(20.dp))
+                    AssistChip(
+                        onClick = { showRombelDialog = true },
+                        label = { Text("Tambah") },
+                        leadingIcon = { Icon(Icons.Default.Add, null, Modifier.size(18.dp)) }
+                    )
+                    selectedRombels.forEach { rombel ->
+                        InputChip(
+                            selected = true,
+                            onClick = {},
+                            label = { Text(rombel.className) },
+                            trailingIcon = {
+                                Icon(Icons.Default.Close, null, Modifier.size(16.dp).clickable { selectedRombels.remove(rombel) })
+                            }
+                        )
+                    }
                 }
             }
 
-            // --- FORM INPUTS ---
+            // --- ID ---
             OutlinedTextField(
-                value = name,
-                onValueChange = { name = it },
-                label = { Text("Nama Lengkap") },
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp),
-                singleLine = true
+                value = studentId, onValueChange = {}, readOnly = true, enabled = false,
+                label = { Text("ID User") }, modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp)
             )
+        }
 
-            // Dropdown Pilihan Kelas
-            MasterClassDropdown(
-                options = masterClasses,
-                selected = selectedMasterClass,
-                onSelect = { selectedMasterClass = it },
-                label = "Pilih Rombel / Kelas"
+        if (showRombelDialog) {
+            RombelSelectionDialog(
+                allClasses = masterClasses,
+                alreadySelected = selectedRombels,
+                onDismiss = { showRombelDialog = false },
+                onSave = { 
+                    selectedRombels.clear()
+                    selectedRombels.addAll(it)
+                    showRombelDialog = false
+                }
             )
-
-            // Info Read-only
-            OutlinedTextField(
-                value = studentId,
-                onValueChange = {},
-                readOnly = true,
-                enabled = false,
-                label = { Text("ID Siswa (Terkunci)") },
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    disabledTextColor = Color.Gray,
-                    disabledBorderColor = Color.LightGray
-                )
-            )
-            
-            if (embedding != null) {
-                Text("✅ Biometrik Wajah Diperbarui", color = Color.Green, style = MaterialTheme.typography.bodySmall)
-            }
         }
 
         if (showFaceCapture) {
             FaceCaptureScreen(
-                mode = CaptureMode.EMBEDDING, // Mengambil Foto + Embedding sekaligus
+                mode = CaptureMode.EMBEDDING,
                 onClose = { showFaceCapture = false },
-                onEmbeddingCaptured = { 
-                    embedding = it
-                    showFaceCapture = false 
-                },
+                onEmbeddingCaptured = { embedding = it; showFaceCapture = false },
                 onPhotoCaptured = { capturedBitmap = it }
             )
         }

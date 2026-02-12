@@ -1,32 +1,25 @@
 package com.example.crashcourse.viewmodel
 
 /**
- * 🔐 State Management Pusat untuk Autentikasi
+ * 🏗️ Auth State Sealed Class
+ * Dipisahkan ke file sendiri agar tidak error "Redeclaration".
  */
 sealed class AuthState {
-    // Sedang memeriksa status login (Splash Screen)
     object Checking : AuthState()
-    
-    // User belum login
     object LoggedOut : AuthState()
     
-    // Sedang loading (Login/Register process)
-    data class Loading(val message: String? = null) : AuthState()
+    data class Loading(val message: String) : AuthState()
+    data class StatusWaiting(val message: String) : AuthState()
+    data class Error(val message: String) : AuthState()
     
-    // User Aktif (Login Berhasil)
+    // ✅ ACTIVE STATE (Data Siap Pakai di UI)
     data class Active(
         val uid: String,
         val email: String,
-        val role: String,       // ADMIN / TEACHER
+        val role: String,
         val schoolName: String,
-        val sekolahId: String,  // 🚀 ID Sekolah Penting
-        val expiryMillis: Long,
-        val assignedClasses: List<String> // Scope Akses Guru
+        val sekolahId: String,
+        val expiryMillis: Long,          // Field Baru
+        val assignedClasses: List<String> // Field Baru
     ) : AuthState()
-    
-    // Error terjadi (Wrong password, network fail)
-    data class Error(val message: String) : AuthState()
-    
-    // Menunggu Aktivasi / Lisensi Habis
-    data class StatusWaiting(val message: String) : AuthState()
 }

@@ -9,9 +9,9 @@ import com.google.firebase.firestore.Query
 import kotlinx.coroutines.tasks.await
 
 /**
- * 👥 FirestoreStudent (FINAL)
+ * 👥 FirestoreStudent (MANY-TO-MANY SUPPORTED)
  * Single source of truth for Student-related Firestore operations.
- * Handles Smart Sync, Upload, Delete, and Fetching.
+ * Diperbarui untuk mendukung sinkronisasi berbasis Array (Multiple Rombel).
  */
 object FirestoreStudent {
 
@@ -20,11 +20,8 @@ object FirestoreStudent {
 
     /**
      * 🔄 SMART SYNC STUDENTS
-     * Mengambil data siswa dengan 3 Layer Filter:
-     * 1. Sekolah ID (Wajib)
-     * 2. Role/Class Security (Hanya kelas yang diizinkan untuk guru tsb)
-     * 3. Incremental Sync (Hanya data yang berubah sejak lastSync)
-     * * (Sebelumnya bernama fetchStudentsForUser, kini diganti agar konsisten dengan SyncViewModel)
+     * Menggunakan 'whereArrayContainsAny' agar Guru/Dosen bisa menarik data 
+     * mahasiswa berdasarkan daftar mata kuliah yang mereka ampu (Many-to-Many).
      */
     suspend fun fetchSmartSyncStudents(
         sekolahId: String,
@@ -42,10 +39,11 @@ object FirestoreStudent {
                 query = query.whereGreaterThan(Constants.KEY_TIMESTAMP, lastSync)
             }
 
-            // 3. Filter Security (Jika bukan Admin, batasi kelas)
+            // 3. Filter Security Many-to-Many
+            // Jika bukan Admin, tarik mahasiswa yang memiliki salah satu matkul yang diampu dosen
             if (role != Constants.ROLE_ADMIN && assignedClasses.isNotEmpty()) {
-                // Catatan: Firestore membatasi 'whereIn' maksimal 10 item.
-                query = query.whereIn(Constants.PILLAR_CLASS, assignedClasses)
+                // Firestore membatasi array-contains-any maksimal 10 item.
+                query = query.whereArrayContainsAny(Constants.PILLAR_CLASS, assignedClasses)
             }
 
             query.get().await().documents.mapNotNull { doc ->
@@ -60,16 +58,16 @@ object FirestoreStudent {
 
     /**
      * 🎯 DOWNLOAD STUDENTS BY ONE ROMBEL
-     * Digunakan untuk fitur spesifik melihat 1 kelas full.
      */
     suspend fun fetchStudentsByRombel(
         sekolahId: String,
         className: String
     ): List<FaceEntity> {
         return try {
+            // Gunakan arrayContains karena di Firestore field className sekarang berbentuk Array
             db.collection(FirestorePaths.STUDENTS)
                 .whereEqualTo(Constants.KEY_SEKOLAH_ID, sekolahId)
-                .whereEqualTo(Constants.PILLAR_CLASS, className)
+                .whereArrayContains(Constants.PILLAR_CLASS, className)
                 .get()
                 .await()
                 .documents
@@ -88,6 +86,12 @@ object FirestoreStudent {
 
     suspend fun uploadStudent(face: FaceEntity) {
         try {
+            // 🔥 LOGIKA KONVERSI CSV KE ARRAY 🔥
+            // Memecah "Math, English" dari Room menjadi ["Math", "English"] untuk Firestore
+            val classList = face.className.split(",")
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+
             db.collection(FirestorePaths.STUDENTS)
                 .document(face.studentId)
                 .set(
@@ -98,7 +102,8 @@ object FirestoreStudent {
                         Constants.FIELD_EMBEDDING to face.embedding.map { it.toDouble() },
                         Constants.KEY_TIMESTAMP to System.currentTimeMillis(),
                         Constants.FIELD_PHOTO_URL to face.photoUrl,
-                        Constants.PILLAR_CLASS to face.className,
+                        // SIMPAN SEBAGAI ARRAY (Penting untuk filter query)
+                        Constants.PILLAR_CLASS to classList, 
                         Constants.FIELD_ROLE to face.role,
                         Constants.PILLAR_GRADE to face.grade,
                         Constants.PILLAR_SUB_GRADE to face.subGrade,
@@ -113,9 +118,6 @@ object FirestoreStudent {
         }
     }
 
-    /**
-     * Alias untuk uploadStudent (digunakan oleh EditUserScreen)
-     */
     suspend fun updateFaceWithPhoto(face: FaceEntity) {
         uploadStudent(face)
     }
@@ -151,13 +153,21 @@ object FirestoreStudent {
                 ?.toFloatArray()
                 ?: return null
 
+            // 🔥 LOGIKA KONVERSI ARRAY KE CSV 🔥
+            // Mengubah kembali ["Math", "English"] dari Firestore menjadi "Math, English" untuk Room
+            val rawClass = data[Constants.PILLAR_CLASS]
+            val classNameString = when (rawClass) {
+                is List<*> -> rawClass.joinToString(", ")
+                else -> rawClass?.toString() ?: ""
+            }
+
             FaceEntity(
                 studentId = data[Constants.FIELD_STUDENT_ID]?.toString() ?: "",
                 sekolahId = data[Constants.KEY_SEKOLAH_ID]?.toString() ?: sekolahIdFallback,
                 name = data[Constants.KEY_NAME]?.toString() ?: "Unknown",
                 photoUrl = data[Constants.FIELD_PHOTO_URL]?.toString(),
                 embedding = embedding,
-                className = data[Constants.PILLAR_CLASS]?.toString() ?: "",
+                className = classNameString,
                 role = data[Constants.FIELD_ROLE]?.toString() ?: Constants.ROLE_USER,
                 grade = data[Constants.PILLAR_GRADE]?.toString() ?: "",
                 subGrade = data[Constants.PILLAR_SUB_GRADE]?.toString() ?: "",

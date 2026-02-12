@@ -9,26 +9,18 @@ import androidx.room.PrimaryKey
  */
 @Entity(tableName = "current_user")
 data class UserEntity(
-
     @PrimaryKey
     val uid: String,
-
-    // Nullable: Firestore may not send immediately
     val sekolahId: String?,
-
     val deviceId: String,
-    val name: String,
+    val name: String, // Ini akan diisi dari school_name
     val email: String,
     val role: String,
-
-    // Requires TypeConverters (List<String>)
     val assignedClasses: List<String> = emptyList(),
-
-    // License / session validity (offline-safe)
-    val expiryMillis: Long = 0L,
-
+    
+    // 🛡️ BUAT DEFAULT 0 agar jika User biasa tidak punya expiry_date di Firestore, tidak crash
+    val expiryMillis: Long = 0L, 
+    
     val photoUrl: String? = null,
-
-    // Last successful sync timestamp
     val lastSync: Long = System.currentTimeMillis()
 )

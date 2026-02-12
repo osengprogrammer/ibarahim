@@ -1,8 +1,11 @@
 package com.example.crashcourse.ui
 
 import android.widget.Toast
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape // 🚀 FIX: Import ini wajib ada
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -11,6 +14,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip // 🚀 FIX: Import ini wajib ada
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -25,29 +29,27 @@ import com.example.crashcourse.viewmodel.SyncViewModel
 import java.text.SimpleDateFormat
 import java.util.*
 
+/**
+ * 👤 ProfileScreen
+ * Menampilkan informasi akun dan sinkronisasi data cloud.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProfileScreen(
     authState: AuthState.Active,
     onLogout: () -> Unit,
-    onNavigateBack: () -> Unit, // 🚀 Tambahkan navigasi balik
-    onInviteStaff: (String, String) -> Unit = { _, _ -> }, 
+    onNavigateBack: () -> Unit,
     syncViewModel: SyncViewModel = viewModel()
 ) {
     val context = LocalContext.current
     val syncState by syncViewModel.syncState.collectAsStateWithLifecycle()
-
-    var showInviteDialog by remember { mutableStateOf(false) }
-    var staffEmail by remember { mutableStateOf("") }
-    var staffPassword by remember { mutableStateOf("") }
-
     val isAdmin = authState.role == "ADMIN"
 
-    // Feedback Sinkronisasi Cloud
+    // --- 🔔 FEEDBACK SINKRONISASI ---
     LaunchedEffect(syncState) {
         when(val s = syncState) {
             is SyncState.Success -> {
-                Toast.makeText(context, s.message, Toast.LENGTH_LONG).show()
+                Toast.makeText(context, s.message, Toast.LENGTH_SHORT).show()
                 syncViewModel.resetState()
             }
             is SyncState.Error -> {
@@ -61,12 +63,13 @@ fun ProfileScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Profil Sekolah") },
+                title = { Text("Profil Akun", fontWeight = FontWeight.Bold) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Kembali")
                     }
-                }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.White)
             )
         }
     ) { padding ->
@@ -74,200 +77,151 @@ fun ProfileScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(16.dp)
-                .verticalScroll(rememberScrollState()),
+                .background(Color(0xFFF8F9FA))
+                .verticalScroll(rememberScrollState())
+                .padding(20.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // 1. Avatar & Informasi Utama
-            Icon(
-                imageVector = Icons.Default.AccountCircle,
-                contentDescription = null,
-                modifier = Modifier.size(100.dp),
-                tint = MaterialTheme.colorScheme.primary
-            )
+            // --- 1. HEADER IDENTITAS ---
+            Box(
+                modifier = Modifier
+                    .size(100.dp)
+                    .background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.AccountBalance,
+                    contentDescription = null,
+                    modifier = Modifier.size(50.dp),
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
             
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(16.dp))
             
             Text(
                 text = authState.schoolName,
                 style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.Bold,
+                color = Color.Black
             )
             
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Surface(
-                    shape = MaterialTheme.shapes.small,
-                    color = if (isAdmin) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary,
-                    modifier = Modifier.padding(vertical = 4.dp)
-                ) {
-                    Text(
-                        text = authState.role, 
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp), 
-                        color = Color.White,
-                        style = MaterialTheme.typography.labelSmall
-                    )
-                }
+            Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = if (isAdmin) Color(0xFFE3F2FD) else Color(0xFFF1F8E9),
+                modifier = Modifier.padding(vertical = 8.dp)
+            ) {
+                Text(
+                    text = authState.role, 
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp), 
+                    color = if (isAdmin) Color(0xFF1976D2) else Color(0xFF388E3C),
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Bold
+                )
             }
             
-            Text(authState.email, style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+            Text(text = authState.email, style = MaterialTheme.typography.bodyMedium, color = Color.Gray)
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(32.dp))
 
-            // 2. Kartu Informasi Lisensi
+            // --- 2. KARTU INFORMASI LISENSI ---
             InfoCard(
-                title = "Masa Aktif Lisensi",
-                value = formatMillisToDate(authState.expiryMillis),
-                icon = Icons.Default.DateRange
+                title = "Status Lisensi Sekolah",
+                value = "Berlaku hingga ${formatMillisToDate(authState.expiryMillis)}",
+                icon = Icons.Default.VerifiedUser,
+                iconColor = Color(0xFF4CAF50)
             )
             
             Spacer(modifier = Modifier.height(16.dp))
 
-            // 3. FITUR SYNC DATA (Cloud -> Local)
+            // --- 3. KARTU SINKRONISASI DATA ---
             Card(
                 modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                shape = RoundedCornerShape(16.dp)
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.CloudSync, null, tint = MaterialTheme.colorScheme.onPrimaryContainer)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            "Sinkronisasi Data", 
-                            style = MaterialTheme.typography.titleMedium, 
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
-                        )
+                        Icon(Icons.Default.CloudSync, null, tint = MaterialTheme.colorScheme.primary)
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Text("Sinkronisasi Cloud", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                     }
+                    
+                    Spacer(modifier = Modifier.height(8.dp))
+                    
                     Text(
-                        "Tarik data murid terbaru dari Cloud ke database offline perangkat.", 
+                        "Tarik data personel terbaru dari server ke database lokal.", 
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                        color = Color.Gray
                     )
                     
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(16.dp))
                     
                     if (syncState is SyncState.Loading) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Text((syncState as SyncState.Loading).message, fontSize = 14.sp)
-                        }
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp)))
+                        Text(
+                            text = (syncState as SyncState.Loading).message,
+                            fontSize = 12.sp,
+                            modifier = Modifier.padding(top = 8.dp),
+                            color = MaterialTheme.colorScheme.primary
+                        )
                     } else {
                         Button(
-                            // ✅ FIX: Panggil tanpa parameter atau sesuaikan dengan ViewModel
                             onClick = { syncViewModel.syncStudentsDown() }, 
                             modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                                contentColor = MaterialTheme.colorScheme.primaryContainer
-                            )
+                            shape = RoundedCornerShape(12.dp)
                         ) {
-                            Text("Ambil Data Murid")
+                            Icon(Icons.Default.Download, null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Tarik Data Terbaru")
                         }
                     }
                 }
             }
 
-            // 4. MANAJEMEN STAFF (KHUSUS ADMIN)
-            if (isAdmin) {
-                Spacer(modifier = Modifier.height(24.dp))
-                Text(
-                    "Manajemen Staff",
-                    modifier = Modifier.fillMaxWidth(),
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary,
-                    style = MaterialTheme.typography.titleSmall
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                
-                OutlinedButton(
-                    onClick = { showInviteDialog = true },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = MaterialTheme.shapes.medium
-                ) {
-                    Icon(Icons.Default.PersonAdd, null)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Daftarkan Guru Baru")
-                }
-            }
+            Spacer(modifier = Modifier.height(40.dp))
 
-            Spacer(modifier = Modifier.weight(1f))
-            Spacer(modifier = Modifier.height(24.dp))
-
-            // 5. Tombol Logout
-            TextButton(
+            // --- 4. TOMBOL KELUAR ---
+            OutlinedButton(
                 onClick = onLogout,
                 modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                shape = RoundedCornerShape(12.dp)
             ) {
-                Icon(Icons.Default.Logout, null)
+                Icon(Icons.Default.Logout, null, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Logout / Keluar Akun", fontWeight = FontWeight.Bold)
+                Text("Keluar Akun", fontWeight = FontWeight.Bold)
             }
         }
-    }
-
-    // --- DIALOG INVITE STAFF ---
-    if (showInviteDialog) {
-        AlertDialog(
-            onDismissRequest = { showInviteDialog = false },
-            title = { Text("Pendaftaran Guru") },
-            text = {
-                Column {
-                    Text("Role: TEACHER. Akses kelas dapat diatur melalui Portal Admin.", fontSize = 12.sp)
-                    Spacer(modifier = Modifier.height(12.dp))
-                    OutlinedTextField(
-                        value = staffEmail,
-                        onValueChange = { staffEmail = it },
-                        label = { Text("Email Guru") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = staffPassword,
-                        onValueChange = { staffPassword = it },
-                        label = { Text("Password Sementara") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true
-                    )
-                }
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        onInviteStaff(staffEmail, staffPassword)
-                        showInviteDialog = false
-                        staffEmail = ""
-                        staffPassword = ""
-                    },
-                    enabled = staffEmail.isNotBlank() && staffPassword.length >= 6
-                ) {
-                    Text("Simpan")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showInviteDialog = false }) { Text("Batal") }
-            }
-        )
     }
 }
 
 @Composable
-fun InfoCard(title: String, value: String, icon: ImageVector) {
+fun InfoCard(title: String, value: String, icon: ImageVector, iconColor: Color) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+        colors = CardDefaults.cardColors(containerColor = Color.White),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        shape = RoundedCornerShape(16.dp)
     ) {
         Row(
             modifier = Modifier.padding(16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(icon, null, tint = MaterialTheme.colorScheme.primary)
+            Surface(
+                color = iconColor.copy(alpha = 0.1f),
+                shape = CircleShape,
+                modifier = Modifier.size(40.dp)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(icon, null, tint = iconColor, modifier = Modifier.size(20.dp))
+                }
+            }
             Spacer(modifier = Modifier.width(16.dp))
             Column {
                 Text(title, style = MaterialTheme.typography.labelSmall, color = Color.Gray)
-                Text(value, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text(value, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
             }
         }
     }

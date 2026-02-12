@@ -18,6 +18,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.toSize
 import com.example.crashcourse.ui.theme.AzuraPrimary
 import com.example.crashcourse.ui.theme.AzuraText
+import androidx.compose.ui.graphics.Color
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -64,7 +65,10 @@ fun <T> AzuraDropdown(
                 unfocusedTextColor = AzuraText,
                 focusedBorderColor = AzuraPrimary,
                 unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
-                focusedLabelColor = AzuraPrimary
+                focusedLabelColor = AzuraPrimary,
+                // Tambahkan Container Color agar background input tidak hitam pekat
+                focusedContainerColor = Color.White, 
+                unfocusedContainerColor = Color.White
             )
         )
 

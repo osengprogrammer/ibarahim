@@ -2,150 +2,113 @@ package com.example.crashcourse.ui.auth
 
 import android.widget.Toast
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Email
-import androidx.compose.material.icons.filled.Lock
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.crashcourse.viewmodel.AuthViewModel
 import com.example.crashcourse.viewmodel.AuthState
 
-/**
- * 🔐 Azura Tech Login Screen
- * Synchronized with NavGraph for reactive session handling.
- */
 @Composable
 fun LoginScreen(
     onNavigateToRegister: () -> Unit,
-    onLoginSuccess: () -> Unit, // 🚀 REQUIRED: Matches the NavGraph contract
-    viewModel: AuthViewModel = viewModel()
+    viewModel: AuthViewModel // ⚠️ WAJIB: Jangan pakai "= viewModel()" disini.
 ) {
     val context = LocalContext.current
-    val state by viewModel.authState.collectAsState()
-    
+    val state by viewModel.authState.collectAsStateWithLifecycle()
+
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
 
-    // 🎯 THE NAVIGATOR: Fires the moment AuthState becomes Active
-    LaunchedEffect(state) {
-        if (state is AuthState.Active) {
-            onLoginSuccess() 
-        }
-    }
-
+    // --- LOGIKA UI SAJA (Navigasi ditangani NavGraph) ---
+    
     Box(
-        modifier = Modifier.fillMaxSize().padding(24.dp), 
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(24.dp),
         contentAlignment = Alignment.Center
     ) {
-        when (state) {
-            is AuthState.Loading -> {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    CircularProgressIndicator()
-                    Spacer(Modifier.height(16.dp))
-                    Text("Memverifikasi Kredensial...", style = MaterialTheme.typography.bodySmall)
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+        ) {
+            Text(
+                text = "Azura Attendance",
+                fontSize = 32.sp,
+                fontWeight = FontWeight.ExtraBold,
+                color = MaterialTheme.colorScheme.primary
+            )
+
+            Spacer(modifier = Modifier.height(40.dp))
+
+            if (state is AuthState.Error) {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp)
+                ) {
+                    Text(
+                        text = (state as AuthState.Error).message,
+                        modifier = Modifier.padding(12.dp),
+                        color = MaterialTheme.colorScheme.onErrorContainer
+                    )
                 }
             }
-            
-            else -> {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    // --- HEADER ---
-                    Text(
-                        text = "Azura Attendance", 
-                        fontSize = 30.sp, 
-                        fontWeight = FontWeight.ExtraBold, 
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Text(
-                        text = "Sistem Absensi Wajah & Smart E-Wallet", 
-                        style = MaterialTheme.typography.labelMedium, 
-                        color = Color.Gray
-                    )
-                    
-                    Spacer(modifier = Modifier.height(32.dp))
 
-                    // --- ERROR FEEDBACK ---
-                    if (state is AuthState.Error) {
-                        Card(
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.errorContainer
-                            ),
-                            modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp)
-                        ) {
-                            Text(
-                                text = (state as AuthState.Error).message, 
-                                color = MaterialTheme.colorScheme.onErrorContainer, 
-                                modifier = Modifier.padding(12.dp),
-                                style = MaterialTheme.typography.bodySmall
-                            )
+            OutlinedTextField(
+                value = email,
+                onValueChange = { email = it },
+                label = { Text("Email") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                enabled = state !is AuthState.Loading
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            OutlinedTextField(
+                value = password,
+                onValueChange = { password = it },
+                label = { Text("Password") },
+                visualTransformation = PasswordVisualTransformation(),
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                enabled = state !is AuthState.Loading
+            )
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            if (state is AuthState.Loading) {
+                CircularProgressIndicator()
+                Text("Sedang masuk...", modifier = Modifier.padding(top = 8.dp))
+            } else {
+                Button(
+                    onClick = {
+                        if (email.isBlank() || password.isBlank()) {
+                            Toast.makeText(context, "Isi email dan password!", Toast.LENGTH_SHORT).show()
+                        } else {
+                            viewModel.login(email, password)
                         }
-                    }
-
-                    // --- INPUT FIELDS ---
-                    OutlinedTextField(
-                        value = email, 
-                        onValueChange = { email = it },
-                        label = { Text("Email Resmi") },
-                        leadingIcon = { Icon(Icons.Default.Email, null) },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp),
-                        singleLine = true
-                    )
-                    
-                    Spacer(modifier = Modifier.height(12.dp))
-                    
-                    OutlinedTextField(
-                        value = password, 
-                        onValueChange = { password = it },
-                        label = { Text("Password") },
-                        leadingIcon = { Icon(Icons.Default.Lock, null) },
-                        visualTransformation = PasswordVisualTransformation(),
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp),
-                        singleLine = true
-                    )
-
-                    TextButton(
-                        onClick = { 
-                            if (email.isNotBlank()) {
-                                viewModel.sendPasswordReset(email)
-                                Toast.makeText(context, "Cek email reset password", Toast.LENGTH_SHORT).show()
-                            } else {
-                                Toast.makeText(context, "Masukkan email dahulu", Toast.LENGTH_SHORT).show()
-                            }
-                        }, 
-                        modifier = Modifier.align(Alignment.End)
-                    ) {
-                        Text("Lupa Password?", fontSize = 12.sp)
-                    }
-
-                    Spacer(modifier = Modifier.height(24.dp))
-
-                    // --- ACTION BUTTON ---
-                    Button(
-                        onClick = { viewModel.login(email, password) },
-                        modifier = Modifier.fillMaxWidth().height(56.dp),
-                        shape = RoundedCornerShape(12.dp),
-                        elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp)
-                    ) {
-                        Text("MASUK KE DASHBOARD", fontWeight = FontWeight.Bold)
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    TextButton(onClick = onNavigateToRegister) {
-                        Text("Belum punya akun? Registrasi Baru")
-                    }
+                    },
+                    modifier = Modifier.fillMaxWidth().height(56.dp)
+                ) {
+                    Text("MASUK")
                 }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            TextButton(onClick = onNavigateToRegister) {
+                Text("Belum punya akun? Daftar")
             }
         }
     }

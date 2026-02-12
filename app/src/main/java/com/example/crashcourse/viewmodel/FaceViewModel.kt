@@ -15,11 +15,8 @@ import kotlinx.coroutines.withContext
 import java.time.LocalDateTime
 
 /**
- * 👤 FaceViewModel (FINAL - FIXED)
- *
- * RESPONSIBILITY:
- * - Local Face DB (Room)
- * - Orchestration logic (AI → DB → Firestore)
+ * 👤 FaceViewModel (V.3 - Many-to-Many Ready)
+ * Mengelola pendaftaran biometrik dan proses check-in berbasis sesi mata kuliah.
  */
 class FaceViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -42,7 +39,7 @@ class FaceViewModel(application: Application) : AndroidViewModel(application) {
         .distinctUntilChanged()
 
     // ==========================================
-    // 🛡️ SCOPED FACE LIST (UI SAFE)
+    // 🛡️ SCOPED FACE LIST
     // ==========================================
     val faceList: StateFlow<List<FaceEntity>> =
         combine(sekolahIdFlow, faceDao.getAllFacesFlow()) { sid, faces ->
@@ -55,28 +52,32 @@ class FaceViewModel(application: Application) : AndroidViewModel(application) {
         )
 
     // ==========================================
-    // 1️⃣ CHECK-IN (AI RESULT → LOCAL → FIRESTORE)
+    // 1️⃣ CHECK-IN (DENGAN KONTEKS SESI MATKUL)
     // ==========================================
-    fun saveCheckInByName(name: String) {
+    /**
+     * Menyimpan data kehadiran berdasarkan hasil deteksi AI dan Sesi yang dipilih Dosen.
+     * @param name Nama hasil deteksi AI Scanner.
+     * @param activeSession Nama mata kuliah yang dipilih di UI (KRS/Sesi Aktif).
+     */
+    fun saveCheckInWithSession(name: String, activeSession: String) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                // 1. Ambil User & Sekolah ID
                 val user = userDao.getCurrentUser() ?: return@launch
                 val sekolahId = user.sekolahId ?: return@launch
 
-                // 2. Cari data siswa dari DB lokal berdasarkan nama
+                // Cari data biometrik lokal
                 val allFaces = faceDao.getFaceByName(name)
                 val face = allFaces.firstOrNull { it.sekolahId == sekolahId }
                     ?: return@launch
 
-                // 3. ⏱️ Cek Cooldown (Anti Spam 30 Detik)
-                val last = checkInDao.getLastTimestampByStudentId(face.studentId)
-                if (last != null && last.isAfter(LocalDateTime.now().minusSeconds(CHECK_IN_COOLDOWN_SEC))) {
-                    Log.d(TAG, "⏳ Cooldown active for ${face.name}")
+                // ⏱️ Anti-Spam Berdasarkan Sesi
+                // Menggunakan fungsi getLastRecordForClass di DAO agar cooldown terikat pada matkul tertentu
+                val lastRecord = checkInDao.getLastRecordForClass(face.studentId, activeSession)
+                if (lastRecord != null && lastRecord.timestamp.isAfter(LocalDateTime.now().minusSeconds(CHECK_IN_COOLDOWN_SEC))) {
+                    Log.d(TAG, "⏳ Cooldown active for ${face.name} in session $activeSession")
                     return@launch
                 }
 
-                // 4. Siapkan Data Record
                 val record = CheckInRecord(
                     id = 0,
                     studentId = face.studentId,
@@ -86,32 +87,31 @@ class FaceViewModel(application: Application) : AndroidViewModel(application) {
                     verified = true,
                     syncStatus = "PENDING",
                     photoPath = "",
-                    className = face.className,
+                    className = activeSession, // Menyimpan sesi spesifik, bukan CSV
                     gradeName = face.grade,
                     role = face.role
                 )
 
-                // 5. Simpan ke Room (Local)
+                // Simpan ke Lokal
                 val rowId = checkInDao.insert(record)
-                val saved = record.copy(id = rowId.toInt())
-
-                // 6. 🔥 Kirim ke FIRESTORE
-                FirestoreAttendance.saveCheckIn(saved, sekolahId)
+                
+                // 🔥 Kirim ke Cloud (Firestore)
+                FirestoreAttendance.saveCheckIn(record.copy(id = rowId.toInt()), sekolahId)
 
             } catch (e: Exception) {
-                Log.e(TAG, "❌ saveCheckInByName failed", e)
+                Log.e(TAG, "❌ saveCheckInWithSession failed", e)
             }
         }
     }
 
     // ==========================================
-    // 2️⃣ REGISTER FACE + ROMBEL
+    // 2️⃣ REGISTER FACE + MULTI ROMBEL
     // ==========================================
-    fun registerFaceWithUnit(
+    fun registerFaceWithMultiUnit(
         studentId: String,
         name: String,
         embedding: FloatArray,
-        unit: MasterClassWithNames,
+        units: List<MasterClassWithNames>,
         photoUrl: String? = null,
         onSuccess: () -> Unit,
         onDuplicate: (String) -> Unit = {}
@@ -126,18 +126,21 @@ class FaceViewModel(application: Application) : AndroidViewModel(application) {
                     return@launch
                 }
 
+                val combinedClassName = units.joinToString(", ") { it.className }
+                val primaryUnit = units.firstOrNull() 
+
                 val face = FaceEntity(
                     studentId = studentId,
                     sekolahId = sekolahId,
                     name = name,
                     photoUrl = photoUrl,
                     embedding = embedding,
-                    className = unit.className,
-                    grade = unit.gradeName ?: "",
-                    role = unit.roleName ?: Constants.ROLE_USER,
-                    program = unit.programName ?: "",
-                    subClass = unit.subClassName ?: "",
-                    subGrade = unit.subGradeName ?: "",
+                    className = combinedClassName,
+                    grade = primaryUnit?.gradeName ?: "",
+                    role = primaryUnit?.roleName ?: Constants.ROLE_USER,
+                    program = primaryUnit?.programName ?: "",
+                    subClass = primaryUnit?.subClassName ?: "",
+                    subGrade = primaryUnit?.subGradeName ?: "",
                     timestamp = System.currentTimeMillis()
                 )
 
@@ -148,73 +151,65 @@ class FaceViewModel(application: Application) : AndroidViewModel(application) {
                 withContext(Dispatchers.Main) { onSuccess() }
 
             } catch (e: Exception) {
-                Log.e(TAG, "❌ registerFaceWithUnit failed", e)
+                Log.e(TAG, "❌ registerFaceWithMultiUnit failed", e)
             }
         }
     }
 
     // ==========================================
-    // 3️⃣ UPDATE FACE (Dipakai EditUserScreen)
+    // 3️⃣ UPDATE FACE + MULTI ROMBEL
     // ==========================================
-    fun updateFaceWithPhoto(
+    fun updateFaceWithMultiUnit(
         originalFace: FaceEntity,
         newName: String,
-        newClass: MasterClassWithNames?,
+        newUnits: List<MasterClassWithNames>,
         newPhotoPath: String?,
         newEmbedding: FloatArray?,
         onSuccess: () -> Unit
     ) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                // 1. Buat object copy dengan data baru
+                val combinedClassName = newUnits.joinToString(", ") { it.className }
+                val primaryUnit = newUnits.firstOrNull()
+
                 val updatedFace = originalFace.copy(
                     name = newName,
-                    // Jika user memilih kelas baru, update semua atributnya
-                    className = newClass?.className ?: originalFace.className,
-                    grade = newClass?.gradeName ?: originalFace.grade,
-                    role = newClass?.roleName ?: originalFace.role,
-                    program = newClass?.programName ?: originalFace.program,
-                    subClass = newClass?.subClassName ?: originalFace.subClass,
-                    subGrade = newClass?.subGradeName ?: originalFace.subGrade,
-                    
-                    // Update foto & embedding jika ada
+                    className = if (newUnits.isNotEmpty()) combinedClassName else originalFace.className,
+                    grade = primaryUnit?.gradeName ?: originalFace.grade,
+                    role = primaryUnit?.roleName ?: originalFace.role,
+                    program = primaryUnit?.programName ?: originalFace.program,
+                    subClass = primaryUnit?.subClassName ?: originalFace.subClass,
+                    subGrade = primaryUnit?.subGradeName ?: originalFace.subGrade,
                     photoUrl = newPhotoPath ?: originalFace.photoUrl,
                     embedding = newEmbedding ?: originalFace.embedding,
                     timestamp = System.currentTimeMillis()
                 )
 
-                // 2. Simpan ke Room (Insert onConflict=Replace akan mengupdate data lama)
                 faceDao.insert(updatedFace)
-
-                // 3. Upload ke Firestore
                 FirestoreStudent.updateFaceWithPhoto(updatedFace)
-
-                // 4. Refresh Cache agar perubahan langsung terasa
                 FaceCache.refresh(getApplication())
 
                 withContext(Dispatchers.Main) { onSuccess() }
 
             } catch (e: Exception) {
-                Log.e(TAG, "❌ updateFaceWithPhoto failed", e)
+                Log.e(TAG, "❌ updateFaceWithMultiUnit failed", e)
             }
         }
     }
 
     // ==========================================
-    // 4️⃣ SYNC STUDENTS (SMART / ROMBEL SAFE)
+    // 4️⃣ SYNC & DELETE
     // ==========================================
     fun syncStudentsFromCloud() {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val user = userDao.getCurrentUser() ?: return@launch
                 val sekolahId = user.sekolahId ?: return@launch
-
                 val lastSync = faceDao.getLastSyncTimestamp() ?: 0L
 
-                // ✅ FIX: Use 'fetchSmartSyncStudents' with correct parameters
                 val students = FirestoreStudent.fetchSmartSyncStudents(
                     sekolahId = sekolahId,
-                    assignedClasses = user.assignedClasses, // Parameter order fixed
+                    assignedClasses = user.assignedClasses,
                     role = user.role,
                     lastSync = lastSync
                 )
@@ -222,20 +217,13 @@ class FaceViewModel(application: Application) : AndroidViewModel(application) {
                 if (students.isNotEmpty()) {
                     faceDao.insertAll(students)
                     FaceCache.refresh(getApplication())
-                    Log.d(TAG, "✅ ${students.size} students synced")
-                } else {
-                    Log.d(TAG, "✅ No new students to sync")
                 }
-
             } catch (e: Exception) {
-                Log.e(TAG, "❌ syncStudentsFromCloud failed", e)
+                Log.e(TAG, "❌ sync failed", e)
             }
         }
     }
 
-    // ==========================================
-    // 5️⃣ DELETE FACE (LOCAL + CLOUD)
-    // ==========================================
     fun deleteFace(face: FaceEntity) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -243,7 +231,7 @@ class FaceViewModel(application: Application) : AndroidViewModel(application) {
                 faceDao.delete(face)
                 FaceCache.refresh(getApplication())
             } catch (e: Exception) {
-                Log.e(TAG, "❌ deleteFace failed", e)
+                Log.e(TAG, "❌ delete failed", e)
             }
         }
     }

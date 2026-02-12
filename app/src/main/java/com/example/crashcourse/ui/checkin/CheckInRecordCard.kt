@@ -1,11 +1,12 @@
 package com.example.crashcourse.ui.checkin
 
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -19,23 +20,26 @@ import com.example.crashcourse.db.CheckInRecord
 import com.example.crashcourse.ui.theme.*
 import java.time.format.DateTimeFormatter
 
+/**
+ * 🏛️ Azura Tech Check-In Record Card
+ * Versi Full CRUD: Klik untuk Edit, Tombol Eksplisit untuk Delete (Khusus Admin).
+ */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun CheckInRecordCard(
     record: CheckInRecord,
-    subClassName: String? = null,
-    subGradeName: String? = null,
-    programName: String? = null,
-    onLongClick: () -> Unit
+    isAdmin: Boolean, // 🚀 NEW: Flag otorisasi
+    onClick: () -> Unit, // 🚀 NEW: Trigger Dialog Edit
+    onDelete: () -> Unit // 🚀 NEW: Trigger Dialog Delete
 ) {
     // ==========================================
-    // STATUS COLOR
+    // LOGIKA WARNA STATUS
     // ==========================================
     val statusColor = when (record.status.uppercase()) {
         "PRESENT" -> AzuraSuccess
-        "SAKIT" -> Color(0xFFFFC107)
-        "IZIN" -> AzuraSecondary
-        "ALPHA" -> AzuraError
+        "SAKIT" -> Color(0xFFFFC107) // Kuning Amber
+        "IZIN" -> AzuraSecondary // Biru Muda
+        "ALPHA" -> AzuraError // Merah
         else -> Color.Gray
     }
 
@@ -46,16 +50,13 @@ fun CheckInRecordCard(
             .shadow(4.dp, RoundedCornerShape(16.dp)),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
-            containerColor = Color(0xFF1E1E1E) // Dark elegant card
+            containerColor = Color(0xFF1E1E1E) // Dark elegant theme
         )
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .combinedClickable(
-                    onClick = { /* Optional: detail */ },
-                    onLongClick = onLongClick
-                )
+                .clickable { onClick() } // Klik kartu untuk edit status
                 .padding(16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -85,17 +86,14 @@ fun CheckInRecordCard(
             // ==========================================
             Column(modifier = Modifier.weight(1f)) {
 
-                // NAME + TIME
+                // NAMA & WAKTU
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = if (record.name.isNotBlank())
-                            record.name
-                        else
-                            "ID: ${record.studentId}",
+                        text = if (record.name.isNotBlank()) record.name else "ID: ${record.studentId}",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         color = Color.White,
@@ -103,50 +101,49 @@ fun CheckInRecordCard(
                     )
 
                     Text(
-                        text = record.timestamp.format(
-                            DateTimeFormatter.ofPattern("HH:mm")
-                        ),
+                        text = record.timestamp.format(DateTimeFormatter.ofPattern("HH:mm")),
                         style = MaterialTheme.typography.labelSmall,
                         color = Color.White.copy(alpha = 0.7f)
                     )
                 }
 
-                // CLASS INFO
-                val classDetail = buildString {
-                    append(record.className ?: "Umum")
-                    if (!subClassName.isNullOrEmpty()) {
-                        append(" ($subClassName)")
-                    }
-                }
-
+                // DETAIL UNIT / KELAS
                 Text(
-                    text = "Kelas: $classDetail",
+                    text = "Unit: ${record.className ?: "Umum"}",
                     style = MaterialTheme.typography.bodySmall,
                     color = Color.White.copy(alpha = 0.6f)
                 )
-
-                // PROGRAM / JURUSAN
-                if (!programName.isNullOrEmpty()) {
-                    Text(
-                        text = programName,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = AzuraPrimary,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
             }
 
             // ==========================================
-            // 3. MANUAL INDICATOR
+            // 3. ACTION AREA (DELETE & INDICATOR)
             // ==========================================
-            if (record.faceId == null) {
-                Spacer(modifier = Modifier.width(8.dp))
-                Icon(
-                    imageVector = Icons.Default.EditNote,
-                    contentDescription = "Manual Entry",
-                    tint = Color.White.copy(alpha = 0.5f),
-                    modifier = Modifier.size(24.dp)
-                )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                
+                // Tampilkan icon EditNote jika input manual (faceId null)
+                if (record.faceId == null) {
+                    Icon(
+                        imageVector = Icons.Default.EditNote,
+                        contentDescription = "Manual Entry",
+                        tint = Color.White.copy(alpha = 0.4f),
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                }
+
+                // 🗑️ TOMBOL DELETE (Hanya muncul jika isAdmin)
+                if (isAdmin) {
+                    IconButton(
+                        onClick = onDelete,
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.DeleteOutline,
+                            contentDescription = "Hapus Record",
+                            tint = Color.White.copy(alpha = 0.6f)
+                        )
+                    }
+                }
             }
         }
     }

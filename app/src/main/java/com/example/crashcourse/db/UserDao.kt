@@ -5,20 +5,32 @@ import kotlinx.coroutines.flow.Flow
 
 /**
  * 🔑 Azura Tech User DAO
- * Handles local login session & sync metadata.
+ * Single Source of Truth untuk sesi login lokal.
+ * Strategi: REPLACE digunakan untuk memastikan transisi antar akun mulus.
  */
 @Dao
 interface UserDao {
 
     // ------------------------------------------
-    // INSERT / REPLACE
+    // 📥 INSERT / REPLACE (Kunci Utama Fix Stuck)
     // ------------------------------------------
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertUser(user: UserEntity)
 
+    /**
+     * Fungsi pembantu untuk memastikan database bersih sebelum diisi user baru.
+     * Digunakan saat proses login untuk mencegah residu data akun lama.
+     */
+    @Transaction
+    suspend fun replaceCurrentUser(user: UserEntity) {
+        deleteUser()
+        insertUser(user)
+    }
+
     // ------------------------------------------
-    // READ
+    // 🔍 READ (Data Retrieval)
     // ------------------------------------------
+    
     @Query("SELECT * FROM current_user LIMIT 1")
     fun getCurrentUserFlow(): Flow<UserEntity?>
 
@@ -28,8 +40,11 @@ interface UserDao {
     @Query("SELECT deviceId FROM current_user LIMIT 1")
     suspend fun getLocalDeviceId(): String?
 
+    @Query("SELECT sekolahId FROM current_user LIMIT 1")
+    suspend fun getSekolahId(): String?
+
     // ------------------------------------------
-    // UPDATE
+    // 🆙 UPDATE (Metadata Sync)
     // ------------------------------------------
     @Query("""
         UPDATE current_user
@@ -39,7 +54,7 @@ interface UserDao {
     suspend fun updateLastSync(uid: String, timestamp: Long)
 
     // ------------------------------------------
-    // DELETE
+    // 🗑️ DELETE (Logout / Cleanup)
     // ------------------------------------------
     @Query("DELETE FROM current_user")
     suspend fun deleteUser()

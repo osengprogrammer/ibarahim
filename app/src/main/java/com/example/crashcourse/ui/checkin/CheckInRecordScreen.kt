@@ -1,57 +1,70 @@
 package com.example.crashcourse.ui.checkin
 
+import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable // ✅ Import untuk interaksi list
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape // ✅ Import untuk radius sudut
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.FilterAltOff
-import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp // ✅ Import untuk satuan teks
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.crashcourse.db.CheckInRecord
 import com.example.crashcourse.db.MasterClassWithNames
 import com.example.crashcourse.ui.components.*
+import com.example.crashcourse.ui.theme.AzuraPrimary
 import com.example.crashcourse.viewmodel.AuthState
 import com.example.crashcourse.viewmodel.CheckInViewModel
 import com.example.crashcourse.viewmodel.MasterClassViewModel
 import java.time.LocalDate
-import java.time.format.DateTimeFormatter
+import java.time.LocalDateTime
 
+/**
+ * 📊 Azura Tech Attendance History Screen
+ * Menghubungkan database Room lokal dengan sinkronisasi Firestore.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CheckInRecordScreen(
     authState: AuthState.Active,
     onNavigateBack: () -> Unit,
     checkInVM: CheckInViewModel = viewModel(),
-    masterClassVM: MasterClassViewModel = viewModel() // 🚀 Tambahkan VM MasterClass
+    masterClassVM: MasterClassViewModel = viewModel()
 ) {
-    // --- 📊 DATA OBSERVATION ---
+    val context = LocalContext.current
+    val isLoading by checkInVM.isLoadingHistory.collectAsStateWithLifecycle()
     val masterClasses by masterClassVM.masterClassesWithNames.collectAsStateWithLifecycle(initialValue = emptyList())
     
-    // --- 🔍 FILTER STATES ---
+    val isAdmin = authState.role == "ADMIN" || authState.role == "SUPERVISOR"
+
     var selectedUnit by remember { mutableStateOf<MasterClassWithNames?>(null) }
     var startDate by remember { mutableStateOf<LocalDate?>(LocalDate.now()) }
     var endDate by remember { mutableStateOf<LocalDate?>(LocalDate.now()) }
     var searchQuery by remember { mutableStateOf("") }
 
-    // Formatter untuk ViewModel
-    val dtf = DateTimeFormatter.ofPattern("yyyy-MM-dd")
+    var showManualDialog by remember { mutableStateOf(false) }
+    var recordToEdit by remember { mutableStateOf<CheckInRecord?>(null) }
+    var recordToDelete by remember { mutableStateOf<CheckInRecord?>(null) }
 
-    // Reactive Data Collection berdasarkan filter
+    // Mengambil data secara reaktif berdasarkan filter Many-to-Many
     val records by checkInVM.getScopedCheckIns(
         role = authState.role,
         assignedClasses = authState.assignedClasses,
         nameFilter = searchQuery,
-        startDateStr = startDate?.format(dtf) ?: "",
-        endDateStr = endDate?.format(dtf) ?: "",
+        startDateStr = startDate?.toString() ?: "",
+        endDateStr = endDate?.toString() ?: "",
         className = selectedUnit?.className
     ).collectAsStateWithLifecycle(initialValue = emptyList())
 
@@ -61,105 +74,244 @@ fun CheckInRecordScreen(
                 title = { Text("Riwayat Absensi", fontWeight = FontWeight.Bold) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, null)
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Kembali")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { 
+                        if (startDate != null && endDate != null) {
+                            checkInVM.fetchHistoricalData(startDate!!, endDate!!, selectedUnit?.className)
+                        } else {
+                            Toast.makeText(context, "Pilih rentang tanggal", Toast.LENGTH_SHORT).show()
+                        }
+                    }) {
+                        if (isLoading) {
+                            CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                        } else {
+                            Icon(Icons.Default.Sync, contentDescription = "Sinkronisasi Cloud")
+                        }
                     }
                 }
             )
+        },
+        floatingActionButton = {
+            FloatingActionButton(
+                onClick = { showManualDialog = true },
+                containerColor = AzuraPrimary,
+                contentColor = Color.White
+            ) { Icon(Icons.Default.Add, contentDescription = "Input Manual") }
         }
     ) { padding ->
-        Column(
-            modifier = Modifier
-                .padding(padding)
-                .fillMaxSize()
-                .background(Color(0xFFF5F5F5))
-        ) {
-            // --- 🛠️ SECTION: FILTER CARD ---
+        Column(modifier = Modifier.padding(padding).fillMaxSize().background(Color(0xFFF5F5F5))) {
+            
+            // --- SECTION: FILTER ---
             Card(
                 modifier = Modifier.fillMaxWidth().padding(16.dp),
-                elevation = CardDefaults.cardElevation(4.dp),
-                colors = CardDefaults.cardColors(containerColor = Color.White)
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
             ) {
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    AzuraInput(
+                        value = searchQuery, 
+                        onValueChange = { searchQuery = it }, 
+                        label = "Cari Nama Siswa", 
+                        leadingIcon = Icons.Default.Search
+                    )
                     
-                    // 1. Dropdown Unit (Rombel)
                     AzuraDropdown(
-                        label = "Pilih Unit / Kelas",
-                        options = masterClasses,
-                        selected = selectedUnit,
-                        onSelected = { selectedUnit = it },
+                        label = "Filter Mata Kuliah", 
+                        options = masterClasses, 
+                        selected = selectedUnit, 
+                        onSelected = { selectedUnit = it }, 
                         itemLabel = { it.className }
                     )
 
-                    // 2. Input Cari Nama
-                    AzuraInput(
-                        value = searchQuery,
-                        onValueChange = { searchQuery = it },
-                        label = "Cari Nama Siswa",
-                        leadingIcon = Icons.Default.Search
-                    )
-
-                    // 3. Filter Tanggal (Maks 1 Bulan)
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        AzuraDatePicker(
-                            label = "Mulai",
-                            selectedDate = startDate,
-                            onDateSelected = { 
-                                startDate = it
-                                // Reset endDate jika startDate melampaui rentang 1 bulan yang sudah ada
-                                if (it != null && endDate != null && endDate!!.isAfter(it.plusMonths(1))) {
-                                    endDate = it.plusMonths(1)
-                                }
-                            },
-                            modifier = Modifier.weight(1f),
-                            maxDate = endDate // Tidak boleh melebihi tanggal selesai
-                        )
-
-                        AzuraDatePicker(
-                            label = "Selesai",
-                            selectedDate = endDate,
-                            onDateSelected = { endDate = it },
-                            modifier = Modifier.weight(1f),
-                            minDate = startDate, // Tidak boleh kurang dari tanggal mulai
-                            maxDate = startDate?.plusMonths(1) // 🚀 LIMIT: MAKSIMAL 1 BULAN
-                        )
-                    }
-
-                    // Button Reset
-                    TextButton(
-                        onClick = {
-                            selectedUnit = null
-                            startDate = LocalDate.now()
-                            endDate = LocalDate.now()
-                            searchQuery = ""
-                        },
-                        modifier = Modifier.align(Alignment.End)
-                    ) {
-                        Icon(Icons.Default.FilterAltOff, null, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("Reset Filter")
+                        AzuraDatePicker(label = "Mulai", selectedDate = startDate, onDateSelected = { startDate = it }, modifier = Modifier.weight(1f))
+                        AzuraDatePicker(label = "Selesai", selectedDate = endDate, onDateSelected = { endDate = it }, modifier = Modifier.weight(1f))
                     }
                 }
             }
 
-            // --- 📑 LIST DATA ---
+            // --- SECTION: LIST DATA ---
             if (records.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("Data tidak ditemukan.", color = Color.Gray)
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            imageVector = Icons.Default.Inbox, 
+                            contentDescription = null, 
+                            modifier = Modifier.size(64.dp), 
+                            tint = Color.LightGray
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text("Tidak ada data ditemukan", color = Color.Gray)
+                    }
                 }
             } else {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(16.dp),
+                    contentPadding = PaddingValues(16.dp, 16.dp, 16.dp, 80.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(records, key = { "${it.studentId}_${it.timestamp}" }) { record ->
                         CheckInRecordCard(
                             record = record,
-                            onLongClick = { checkInVM.deleteCheckInRecord(record) }
+                            isAdmin = isAdmin,
+                            onClick = { recordToEdit = record },
+                            onDelete = { recordToDelete = record }
                         )
                     }
                 }
             }
         }
+
+        // --- SECTION: DIALOGS ---
+
+        if (showManualDialog) {
+            ManualCheckInDialog(
+                masterClasses = masterClasses,
+                onDismiss = { showManualDialog = false },
+                onConfirm = { name, sid, unit, status ->
+                    val newRecord = CheckInRecord(
+                        studentId = sid,
+                        name = name,
+                        timestamp = LocalDateTime.now(),
+                        status = status,
+                        verified = true,
+                        className = unit.className,
+                        gradeName = unit.gradeName ?: "",
+                        role = unit.roleName ?: "STUDENT",
+                        syncStatus = "PENDING"
+                    )
+                    checkInVM.saveCheckIn(newRecord)
+                    showManualDialog = false
+                    Toast.makeText(context, "Berhasil simpan log manual", Toast.LENGTH_SHORT).show()
+                }
+            )
+        }
+
+        recordToEdit?.let { record ->
+            EditStatusDialog(
+                currentStatus = record.status,
+                onDismiss = { recordToEdit = null },
+                onConfirm = { newStatus ->
+                    checkInVM.updateCheckInStatus(record, newStatus)
+                    recordToEdit = null
+                }
+            )
+        }
+
+        recordToDelete?.let { record ->
+            AlertDialog(
+                onDismissRequest = { recordToDelete = null },
+                title = { Text("Konfirmasi Hapus") },
+                text = { Text("Apakah Anda yakin ingin menghapus log ${record.name}? Data di Cloud juga akan terhapus.") },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            checkInVM.deleteCheckInRecord(record)
+                            recordToDelete = null
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color.Red)
+                    ) { Text("Hapus", color = Color.White) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { recordToDelete = null }) { Text("Batal") }
+                },
+                shape = RoundedCornerShape(24.dp)
+            )
+        }
     }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ManualCheckInDialog(
+    masterClasses: List<MasterClassWithNames>,
+    onDismiss: () -> Unit,
+    onConfirm: (name: String, sid: String, unit: MasterClassWithNames, status: String) -> Unit
+) {
+    var name by remember { mutableStateOf("") }
+    var sid by remember { mutableStateOf("") }
+    var selectedUnit by remember { mutableStateOf<MasterClassWithNames?>(null) }
+    var selectedStatus by remember { mutableStateOf("PRESENT") }
+    val statuses = listOf("PRESENT", "SAKIT", "IZIN", "ALPHA")
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Input Kehadiran Manual", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                AzuraInput(value = name, onValueChange = { name = it }, label = "Nama Lengkap")
+                AzuraInput(value = sid, onValueChange = { sid = it }, label = "NIM / ID Siswa")
+                
+                AzuraDropdown(
+                    label = "Pilih Mata Kuliah", 
+                    options = masterClasses, 
+                    selected = selectedUnit, 
+                    onSelected = { selectedUnit = it }, 
+                    itemLabel = { it.className }
+                )
+                
+                Text("Status Kehadiran:", style = MaterialTheme.typography.labelMedium)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    statuses.forEach { status ->
+                        FilterChip(
+                            selected = selectedStatus == status,
+                            onClick = { selectedStatus = status },
+                            label = { Text(status, fontSize = 10.sp) }
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                enabled = name.isNotBlank() && sid.isNotBlank() && selectedUnit != null, 
+                onClick = { onConfirm(name, sid, selectedUnit!!, selectedStatus) }
+            ) { Text("Simpan") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Batal") } },
+        shape = RoundedCornerShape(28.dp)
+    )
+}
+
+@Composable
+fun EditStatusDialog(
+    currentStatus: String,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit
+) {
+    val statuses = listOf("PRESENT", "SAKIT", "IZIN", "ALPHA")
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Ubah Status") },
+        text = {
+            Column {
+                statuses.forEach { status ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onConfirm(status) }
+                            .padding(vertical = 12.dp, horizontal = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(selected = status == currentStatus, onClick = null)
+                        Spacer(Modifier.width(12.dp))
+                        Text(
+                            text = status, 
+                            fontWeight = if (status == currentStatus) FontWeight.Bold else FontWeight.Normal,
+                            color = if (status == currentStatus) AzuraPrimary else Color.Unspecified
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Tutup") } },
+        shape = RoundedCornerShape(28.dp)
+    )
 }

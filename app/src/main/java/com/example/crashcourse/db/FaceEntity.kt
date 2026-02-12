@@ -1,5 +1,6 @@
 package com.example.crashcourse.db
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -7,10 +8,12 @@ import com.example.crashcourse.utils.Constants
 
 /**
  * 👤 Azura Tech Face Entity
- * Menggunakan nama tabel "students" sesuai arsitektur database.
+ * * Arsitektur ini mendukung skenario Many-to-Many:
+ * Kolom [className] akan menyimpan string CSV (contoh: "Socio Linguistic, Translation") 
+ * yang diproses oleh ViewModel sebelum disimpan ke Room.
  */
 @Entity(
-    tableName = "students", // 🚀 Diubah dari "faces" menjadi "students"
+    tableName = "students",
     indices = [
         Index(value = ["sekolahId"]),
         Index(value = ["className"]),
@@ -19,16 +22,24 @@ import com.example.crashcourse.utils.Constants
 )
 data class FaceEntity(
     @PrimaryKey 
+    @ColumnInfo(name = "studentId")
     val studentId: String, 
 
+    @ColumnInfo(name = "sekolahId")
     val sekolahId: String,
+    
     val firestoreId: String? = null,
 
     val name: String,
     val photoUrl: String? = null,
-    val embedding: FloatArray, // ⚠️ Pastikan Converters.kt menangani ini
+    
+    /**
+     * 🧠 AI Embedding
+     * Memerlukan Converters.kt untuk mengubah FloatArray menjadi format yang didukung Room.
+     */
+    val embedding: FloatArray, 
 
-    // Master Data Mapping
+    // --- Master Data Mapping (ID) ---
     val classId: Int? = null,
     val subClassId: Int? = null,
     val gradeId: Int? = null,
@@ -36,7 +47,11 @@ data class FaceEntity(
     val programId: Int? = null,
     val roleId: Int? = null,
 
-    // UI Denormalized Fields
+    // --- UI Denormalized Fields (Names) ---
+    /**
+     * Menyimpan gabungan nama Rombel/Mata Kuliah. 
+     * Contoh: "Socio Linguistic, Translation"
+     */
     val className: String = "",
     val subClass: String = "",
     val grade: String = "",
@@ -46,10 +61,14 @@ data class FaceEntity(
 
     val timestamp: Long = System.currentTimeMillis()
 ) {
-    // equals dan hashCode tetap sama seperti sebelumnya (sudah benar)
+    /**
+     * ⚠️ Penting: Override equals dan hashCode karena menggunakan FloatArray.
+     * Tanpa ini, perbandingan objek biometrik tidak akan akurat.
+     */
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (other !is FaceEntity) return false
+
         if (studentId != other.studentId) return false
         if (sekolahId != other.sekolahId) return false
         if (firestoreId != other.firestoreId) return false
@@ -68,7 +87,9 @@ data class FaceEntity(
         if (subGrade != other.subGrade) return false
         if (program != other.program) return false
         if (role != other.role) return false
-        return timestamp == other.timestamp
+        if (timestamp != other.timestamp) return false
+
+        return true
     }
 
     override fun hashCode(): Int {

@@ -1,11 +1,12 @@
 package com.example.crashcourse.viewmodel
 
 import android.app.Application
+import android.content.Context
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.crashcourse.db.*
-import com.example.crashcourse.firestore.options.FirestoreOptions // ✅ NEW IMPORT
+import com.example.crashcourse.firestore.options.FirestoreOptions
 import com.example.crashcourse.utils.Constants
 import com.google.firebase.firestore.ListenerRegistration
 import kotlinx.coroutines.Dispatchers
@@ -14,13 +15,12 @@ import kotlinx.coroutines.launch
 
 /**
  * 🏛️ Azura Tech Options ViewModel
- * Menangani Sinkronisasi Master Data 6-Pilar antara Firestore dan Database Lokal.
+ * Menangani Sinkronisasi Master Data 6-Pilar dengan metode Incremental Sync.
  */
 class OptionsViewModel(application: Application) : AndroidViewModel(application) {
 
     private val db = AppDatabase.getInstance(application)
-
-    // Tracking listeners untuk dibersihkan saat ViewModel hancur
+    private val prefs = application.getSharedPreferences("azura_sync_prefs", Context.MODE_PRIVATE)
     private val listeners = mutableListOf<ListenerRegistration>()
 
     // --- 📊 LOCAL DATA FLOWS (Room) ---
@@ -53,24 +53,32 @@ class OptionsViewModel(application: Application) : AndroidViewModel(application)
     // --- 🚀 CLOUD ACTIONS ---
 
     /**
-     * Trigger manual untuk mengunduh ulang semua Master Data.
+     * 🔄 INCREMENTAL SYNC
+     * Hanya mengunduh data yang berubah sejak sinkronisasi terakhir.
      */
     fun syncAllFromCloud() {
         viewModelScope.launch(Dispatchers.IO) {
             _isSyncing.value = true
             try {
+                // 1. Ambil waktu sync terakhir (default 0 jika belum pernah)
+                val lastSync = prefs.getLong("last_options_sync", 0L)
                 val types = listOf("Class", "SubClass", "Grade", "SubGrade", "Program", "Role")
+                
                 types.forEach { type ->
                     val collectionName = getCollectionName(type)
-                    // ✅ UPDATED: Use FirestoreOptions
-                    val cloudData = FirestoreOptions.fetchOptionsOnce(collectionName)
-                    if (cloudData.isNotEmpty()) {
-                        processCloudData(type, cloudData)
+                    // 🚀 Gunakan fetchOptionsUpdates (Bukan fetchOnce lagi)
+                    val updates = FirestoreOptions.fetchOptionsUpdates(collectionName, lastSync)
+                    if (updates.isNotEmpty()) {
+                        processCloudData(type, updates)
                     }
                 }
-                Log.d("OptionsVM", "✅ Manual Sync Complete")
+
+                // 2. Simpan waktu sync sekarang sebagai patokan berikutnya
+                prefs.edit().putLong("last_options_sync", System.currentTimeMillis()).apply()
+                
+                Log.d("OptionsVM", "✅ Incremental Sync Complete")
             } catch (e: Exception) {
-                Log.e("OptionsVM", "❌ Manual Sync Failed: ${e.message}")
+                Log.e("OptionsVM", "❌ Sync Failed: ${e.message}")
             } finally {
                 _isSyncing.value = false
             }
@@ -87,7 +95,6 @@ class OptionsViewModel(application: Application) : AndroidViewModel(application)
             "parentId" to (parentId ?: 0)
         )
         viewModelScope.launch(Dispatchers.IO) {
-            // ✅ UPDATED: Use FirestoreOptions
             FirestoreOptions.saveOption(collectionName, newId, data)
         }
     }
@@ -102,7 +109,6 @@ class OptionsViewModel(application: Application) : AndroidViewModel(application)
             "parentId" to (parentId ?: 0)
         )
         viewModelScope.launch(Dispatchers.IO) {
-            // ✅ UPDATED: Use FirestoreOptions
             FirestoreOptions.saveOption(collectionName, id, data)
         }
     }
@@ -112,10 +118,8 @@ class OptionsViewModel(application: Application) : AndroidViewModel(application)
         val id = getOptionId(option)
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                // ✅ UPDATED: Use FirestoreOptions
                 FirestoreOptions.deleteOption(collectionName, id)
-                
-                // Hapus lokal secara optimis
+                // Hapus lokal tetap dilakukan (optimis)
                 when (option) {
                     is ClassOption -> db.classOptionDao().delete(option)
                     is SubClassOption -> db.subClassOptionDao().delete(option)
@@ -143,8 +147,7 @@ class OptionsViewModel(application: Application) : AndroidViewModel(application)
         )
 
         syncMap.forEach { (coll, type) ->
-            // ✅ UPDATED: Use FirestoreOptions
-            listeners.add(FirestoreOptions.listenToOptions(coll) { list: List<Map<String, Any>> ->
+            listeners.add(FirestoreOptions.listenToOptions(coll) { list ->
                 viewModelScope.launch(Dispatchers.IO) {
                     processCloudData(type, list)
                 }
@@ -154,6 +157,7 @@ class OptionsViewModel(application: Application) : AndroidViewModel(application)
 
     private suspend fun processCloudData(type: String, dataList: List<Map<String, Any>>) {
         try {
+            // Kita gunakan insertAll dengan OnConflictStrategy.REPLACE di DAO
             when (type) {
                 "Class" -> db.classOptionDao().insertAll(dataList.map {
                     ClassOption(it["id"].toString().toIntOrNull() ?: 0, it["name"].toString(), it["order"].toString().toIntOrNull() ?: 0)
@@ -178,8 +182,6 @@ class OptionsViewModel(application: Application) : AndroidViewModel(application)
             Log.e("OptionsVM", "Error processing cloud data: ${e.message}")
         }
     }
-
-    // --- ⚙️ HELPERS ---
 
     private fun getCollectionName(type: String): String = when(type) {
         "Class" -> Constants.COLL_OPT_CLASSES

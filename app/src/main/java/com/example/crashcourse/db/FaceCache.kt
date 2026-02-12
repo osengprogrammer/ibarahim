@@ -1,54 +1,45 @@
-package com.example.crashcourse.db// 🚀 FIXED: Now matches ViewModel imports
+package com.example.crashcourse.db
 
 import android.content.Context
 import android.util.Log
-import com.example.crashcourse.db.AppDatabase
-import com.example.crashcourse.db.FaceEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * 🧠 Azura Tech Face Cache
- * Acts as the "RAM Memory" for the AI Scanner.
- * Ensures the C++ engine has instant access to face embeddings.
+ * 🧠 Azura Tech Face Cache (Optimized)
  */
 object FaceCache {
     private const val TAG = "FaceCache"
     
-    // RAM Cache - Volatile ensures all threads see the latest update immediately
     @Volatile
     private var faceList: List<FaceEntity> = emptyList()
 
-    /**
-     * Returns the current list of faces stored in RAM.
-     */
-    fun getFaces(): List<FaceEntity> {
-        return faceList
-    }
+    fun getFaces(): List<FaceEntity> = faceList
 
-    /**
-     * 🛡️ CLEAR CACHE
-     * Must be called during logout to prevent data leaking between schools.
-     */
     fun clear() {
         faceList = emptyList()
-        Log.d(TAG, "FaceCache cleared for security.")
+        Log.d(TAG, "FaceCache cleared.")
     }
 
     /**
-     * 🔄 REFRESH (Suspend)
-     * Pulls data from Room DB into RAM. Call this after any Bulk Registration.
+     * Memastikan data tersedia di RAM. 
+     * Bisa dipanggil di 'onCreate' layar kamera untuk antisipasi cache kosong.
      */
+    suspend fun ensureLoaded(context: Context) {
+        if (faceList.isEmpty()) refresh(context)
+    }
+
     suspend fun refresh(context: Context) {
         withContext(Dispatchers.IO) {
             try {
-                val db = AppDatabase.getInstance(context)
-                // 🚀 Load all faces currently in the local Room DB
-                val updatedList = db.faceDao().getAllFaces() 
+                // Pastikan akses DAO aman
+                val dao = AppDatabase.getInstance(context).faceDao()
+                val updatedList = dao.getAllFaces() 
+                
                 faceList = updatedList
-                Log.d(TAG, "FaceCache refreshed: ${faceList.size} faces loaded into RAM.")
+                Log.d(TAG, "RAM Cache updated: ${faceList.size} identities ready for AI scan.")
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to refresh FaceCache", e)
+                Log.e(TAG, "Refresh Error", e)
             }
         }
     }

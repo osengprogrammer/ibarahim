@@ -3,16 +3,14 @@ package com.example.crashcourse.ui.add
 import android.graphics.Bitmap
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Fingerprint
-import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -24,13 +22,12 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.example.crashcourse.db.MasterClassWithNames // 🚀 FIX: Pastikan import dari DB
-import com.example.crashcourse.ui.components.*
-import com.example.crashcourse.ui.theme.*
+import com.example.crashcourse.db.MasterClassWithNames
+import com.example.crashcourse.ui.components.* import com.example.crashcourse.ui.theme.*
 import com.example.crashcourse.utils.PhotoStorageUtils
-import com.example.crashcourse.utils.showToast
 import com.example.crashcourse.viewmodel.FaceViewModel
 import com.example.crashcourse.viewmodel.MasterClassViewModel
 import kotlinx.coroutines.Dispatchers
@@ -38,10 +35,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * 📝 Azura Tech Add User Screen
- * Versi 6-Pilar: Mengintegrasikan unit rakitan ke dalam pendaftaran biometrik.
+ * 📝 Azura Tech Add User Screen (Many-to-Many Ready)
+ * Mengelola pendaftaran personil dengan dukungan multi-rombel/mata kuliah.
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun AddUserScreen(
     onNavigateBack: () -> Unit,      
@@ -55,8 +52,10 @@ fun AddUserScreen(
 
     // --- 📊 DATA OBSERVATION ---
     val masterClasses by masterClassVM.masterClassesWithNames.collectAsStateWithLifecycle(emptyList())
-    // 🚀 FIX: Berikan tipe eksplisit agar tidak "Cannot infer type"
-    var selectedClass by remember { mutableStateOf<MasterClassWithNames?>(null) }
+    
+    // --- 🚀 MULTI-SELECT STATE ---
+    val selectedRombels = remember { mutableStateListOf<MasterClassWithNames>() }
+    var showRombelDialog by remember { mutableStateOf(false) }
 
     // --- FORM STATES ---
     var name by remember { mutableStateOf("") }
@@ -74,7 +73,7 @@ fun AddUserScreen(
     fun resetForm() {
         name = ""
         studentId = ""
-        selectedClass = null
+        selectedRombels.clear()
         embedding = null
         capturedBitmap = null
         isSubmitting = false
@@ -116,16 +115,47 @@ fun AddUserScreen(
                 
                 Spacer(Modifier.height(16.dp))
 
-                // 🚀 UNIT DROPDOWN (Integrasi 6-Pilar)
-                Text("Penempatan / Unit", style = MaterialTheme.typography.labelMedium, color = AzuraText.copy(alpha = 0.6f))
+                // --- 🚀 MULTI-SELECT ROMBEL SECTION ---
+                Text("Daftar Mata Kuliah / Rombel", style = MaterialTheme.typography.labelMedium, color = AzuraText.copy(alpha = 0.6f))
                 Spacer(Modifier.height(8.dp))
                 
-                MasterClassDropdown(
-                    options = masterClasses,
-                    selected = selectedClass,
-                    onSelect = { selectedClass = it },
-                    label = "Pilih Unit Rakitan"
-                )
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    // Tombol Tambah
+                    AssistChip(
+                        onClick = { showRombelDialog = true },
+                        label = { Text("Tambah Matkul") },
+                        leadingIcon = { Icon(Icons.Default.Add, null, modifier = Modifier.size(18.dp)) },
+                        colors = AssistChipDefaults.assistChipColors(containerColor = AzuraPrimary.copy(alpha = 0.1f))
+                    )
+
+                    // Daftar Chip yang terpilih
+                    selectedRombels.forEach { rombel ->
+                        InputChip(
+                            selected = true,
+                            onClick = { },
+                            label = { Text(rombel.className) },
+                            trailingIcon = {
+                                Icon(
+                                    Icons.Default.Close, 
+                                    null, 
+                                    Modifier.size(16.dp).clickable { selectedRombels.remove(rombel) }
+                                )
+                            }
+                        )
+                    }
+                }
+                
+                if (selectedRombels.isEmpty()) {
+                    Text(
+                        "* Pilih minimal satu mata kuliah", 
+                        style = MaterialTheme.typography.bodySmall, 
+                        color = Color.Red.copy(alpha = 0.7f)
+                    )
+                }
                 
                 Spacer(Modifier.height(24.dp))
 
@@ -144,7 +174,6 @@ fun AddUserScreen(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        // Scan Wajah (Embedding)
                         Button(
                             onClick = { captureMode = CaptureMode.EMBEDDING; showFaceCapture = true },
                             modifier = Modifier.fillMaxWidth().height(52.dp),
@@ -159,7 +188,6 @@ fun AddUserScreen(
                             Text(if (embedding == null) "Ambil Biometrik Wajah" else "Wajah Terverifikasi ✅")
                         }
 
-                        // Ambil Foto Profil
                         Button(
                             onClick = { captureMode = CaptureMode.PHOTO; showFaceCapture = true },
                             modifier = Modifier.fillMaxWidth().height(52.dp),
@@ -199,26 +227,24 @@ fun AddUserScreen(
                         val finalName = name.trim()
                         val finalId = studentId.trim()
                         
-                        // Validation logic
-                        if (selectedClass == null || embedding == null || capturedBitmap == null || finalName.isBlank() || finalId.isBlank()) {
-                            scope.launch { snackbarHostState.showSnackbar("Harap lengkapi semua data dan biometrik!") }
+                        if (selectedRombels.isEmpty() || embedding == null || capturedBitmap == null || finalName.isBlank() || finalId.isBlank()) {
+                            scope.launch { snackbarHostState.showSnackbar("Harap lengkapi identitas, matkul, dan biometrik!") }
                             return@AzuraButton
                         }
 
                         isSubmitting = true
                         scope.launch(Dispatchers.IO) {
                             try {
-                                // 1. Save photo locally
                                 val photoPath = PhotoStorageUtils.saveFacePhoto(context, capturedBitmap!!, finalId)
                                 
                                 if (photoPath != null) {
-                                    // 2. Register Face with Unit support
-                                    faceViewModel.registerFaceWithUnit(
+                                    // 🔥 SINKRONISASI KE FUNGSI MULTI UNIT DI VIEWMODEL 🔥
+                                    faceViewModel.registerFaceWithMultiUnit(
                                         studentId = finalId,
                                         name = finalName,
                                         embedding = embedding!!,
+                                        units = selectedRombels.toList(), // Mengirim List Objek
                                         photoUrl = photoPath,
-                                        unit = selectedClass!!, 
                                         onSuccess = {
                                             scope.launch(Dispatchers.Main) {
                                                 isSubmitting = false
@@ -236,7 +262,7 @@ fun AddUserScreen(
                             } catch (e: Exception) {
                                 withContext(Dispatchers.Main) {
                                     isSubmitting = false
-                                    snackbarHostState.showSnackbar("Gagal menyimpan: ${e.message}")
+                                    snackbarHostState.showSnackbar("Gagal: ${e.message}")
                                 }
                             }
                         }
@@ -252,7 +278,7 @@ fun AddUserScreen(
                     onDismissRequest = { },
                     icon = { Icon(Icons.Default.CheckCircle, null, tint = AzuraSuccess, modifier = Modifier.size(64.dp)) },
                     title = { Text("Registrasi Berhasil", fontWeight = FontWeight.Bold) },
-                    text = { Text("$name telah terdaftar pada unit ${selectedClass?.className}.") },
+                    text = { Text("$name berhasil terdaftar pada ${selectedRombels.size} mata kuliah.") },
                     confirmButton = {
                         AzuraButton(
                             text = "Selesai",
@@ -265,6 +291,20 @@ fun AddUserScreen(
                     },
                     shape = RoundedCornerShape(28.dp),
                     containerColor = Color.White
+                )
+            }
+
+            // --- 🚀 ROMBEL SELECTION DIALOG (REUSABLE COMPONENT) ---
+            if (showRombelDialog) {
+                RombelSelectionDialog(
+                    allClasses = masterClasses,
+                    alreadySelected = selectedRombels,
+                    onDismiss = { showRombelDialog = false },
+                    onSave = { newSelection ->
+                        selectedRombels.clear()
+                        selectedRombels.addAll(newSelection)
+                        showRombelDialog = false
+                    }
                 )
             }
 

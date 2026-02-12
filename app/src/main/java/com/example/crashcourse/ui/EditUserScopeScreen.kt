@@ -1,14 +1,18 @@
 package com.example.crashcourse.ui
 
-import android.util.Log
 import android.widget.Toast
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.CheckBox
+import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
@@ -17,72 +21,120 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.example.crashcourse.utils.Constants // 🚀 Gunakan Constants
+import androidx.compose.ui.unit.sp
+import com.example.crashcourse.firestore.core.FirestorePaths
+import com.example.crashcourse.ui.theme.AzuraPrimary
+import com.example.crashcourse.utils.Constants
+import com.example.crashcourse.viewmodel.AuthState
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.SetOptions
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 
+/**
+ * 🔐 EditUserScopeScreen (Final & Stable)
+ * Mengelola "Wilayah Kuasa" (Scope) akses Rombel untuk Akun Staff/Guru.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EditUserScopeScreen(
     userId: String,
+    authState: AuthState.Active,
     onBack: () -> Unit
 ) {
     val db = FirebaseFirestore.getInstance()
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
-    // State Data
-    var email by remember { mutableStateOf("Loading...") }
-    var selectedRole by remember { mutableStateOf("USER") } // Default
+    // State Data User
+    var targetDocId by remember { mutableStateOf("") }
+    var targetEmail by remember { mutableStateOf("Mencari user...") }
     
-    // State List Kelas
+    // State Kelas
     val allClassNames = remember { mutableStateListOf<String>() }
     val selectedClasses = remember { mutableStateListOf<String>() }
     
-    // UI State
+    // Debug & UI State
+    var debugMessage by remember { mutableStateOf("Memuat data...") }
     var searchQuery by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(true) }
-    var isSaving by remember { mutableStateOf(false) } // 🚀 Status Saving
+    var isSaving by remember { mutableStateOf(false) }
 
-    // Filter Logic
-    val filteredClassNames = remember(searchQuery, allClassNames) {
+    // Logic Search Filter
+    val filteredClasses = remember(searchQuery, allClassNames.toList()) {
         if (searchQuery.isEmpty()) allClassNames
         else allClassNames.filter { it.contains(searchQuery, ignoreCase = true) }
     }
 
-    // Load Data
+    // --- 📥 1. LOAD DATA ---
     LaunchedEffect(userId) {
-        isLoading = true
         try {
-            // 1. Ambil Daftar Kelas Unik dari Koleksi Students (Bukan Options)
-            // Ini memastikan kelas yang muncul adalah yang BENAR-BENAR ADA muridnya
-            val studentsSnapshot = db.collection(Constants.COLL_STUDENTS).get().await()
+            isLoading = true
+            debugMessage = "Sekolah ID: '${authState.sekolahId}'"
             
-            val classes = studentsSnapshot.documents
-                .mapNotNull { it.getString("className") }
-                .filter { it.isNotEmpty() }
+            // A. AMBIL MASTER ROMBEL DARI SEKOLAH INI
+            val masterSnapshot = db.collection(FirestorePaths.MASTER_CLASSES)
+                .whereEqualTo(Constants.KEY_SEKOLAH_ID, authState.sekolahId)
+                .get().await()
+            
+            if (masterSnapshot.isEmpty) {
+                debugMessage += "\n❌ HASIL KOSONG! Admin belum membuat Rombel."
+            }
+
+            val classes = masterSnapshot.documents
+                .mapNotNull { doc -> 
+                    // Coba berbagai kemungkinan nama field agar tidak null
+                    val rawVal = doc.get(Constants.PILLAR_CLASS) 
+                        ?: doc.get("name") 
+                        ?: doc.get("nama") 
+                        ?: doc.id 
+                    rawVal?.toString() 
+                }
                 .distinct()
                 .sorted()
 
             allClassNames.clear()
             allClassNames.addAll(classes)
-            Log.d("EditScope", "Kelas ditemukan: ${classes.size}")
 
-            // 2. Ambil Data User Target
-            val userDoc = db.collection(Constants.COLL_USERS).document(userId).get().await()
-            email = userDoc.getString("email") ?: "No Email"
-            selectedRole = userDoc.getString("role") ?: "USER"
-            
-            val assigned = userDoc.get("assigned_classes") as? List<String> ?: emptyList()
-            selectedClasses.clear()
-            selectedClasses.addAll(assigned)
+            // B. CARI USER DENGAN SMART SEARCH (ID atau Email)
+            val userCol = db.collection(FirestorePaths.USERS)
+            var userSnapshot = try {
+                // 1. Coba cari pakai ID Dokumen dulu (Prioritas Utama)
+                val doc = userCol.document(userId).get().await()
+                if (doc.exists()) doc else null
+            } catch (e: Exception) { null }
+
+            // 2. Jika tidak ketemu, cari berdasarkan field 'email'
+            if (userSnapshot == null) {
+                val queryEmail = userCol.whereEqualTo("email", userId).get().await()
+                if (!queryEmail.isEmpty) {
+                    userSnapshot = queryEmail.documents.first()
+                } else {
+                    // 3. Coba cari by UID kalau-kalau userId yg dikirim adalah UID
+                    val queryUid = userCol.whereEqualTo("uid", userId).get().await()
+                    if (!queryUid.isEmpty) userSnapshot = queryUid.documents.first()
+                }
+            }
+
+            if (userSnapshot != null && userSnapshot.exists()) {
+                targetDocId = userSnapshot.id // ID Dokumen Firestore yang asli
+                targetEmail = userSnapshot.getString("email") ?: "Tanpa Email"
+                
+                // Ambil assigned_classes yang sudah ada
+                val assignedRaw = userSnapshot.get("assigned_classes") as? List<*> ?: emptyList<Any>()
+                selectedClasses.clear()
+                selectedClasses.addAll(assignedRaw.map { it.toString() })
+            } else {
+                debugMessage += "\n❌ User tidak ditemukan: $userId"
+                targetEmail = "User Tidak Ditemukan"
+            }
             
         } catch (e: Exception) {
-            Log.e("EditScope", "Gagal load data", e)
-            Toast.makeText(context, "Error: ${e.message}", Toast.LENGTH_SHORT).show()
+            debugMessage = "CRITICAL ERROR: ${e.message}"
+            Toast.makeText(context, "Error Load: ${e.message}", Toast.LENGTH_LONG).show()
         } finally {
             isLoading = false
         }
@@ -93,8 +145,12 @@ fun EditUserScopeScreen(
             TopAppBar(
                 title = { 
                     Column {
-                        Text("Akses Guru", fontWeight = FontWeight.Bold)
-                        Text(email, style = MaterialTheme.typography.bodySmall)
+                        Text("Atur Scope Guru", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                        Text(
+                            if (isLoading) "Memuat data..." else targetEmail, 
+                            style = MaterialTheme.typography.labelSmall, 
+                            color = AzuraPrimary
+                        )
                     }
                 },
                 navigationIcon = {
@@ -103,152 +159,184 @@ fun EditUserScopeScreen(
                     }
                 },
                 actions = {
-                    if (!isLoading && !isSaving) {
-                        Button(
-                            onClick = {
-                                scope.launch {
-                                    isSaving = true
-                                    try {
-                                        db.collection(Constants.COLL_USERS).document(userId).update(
-                                            mapOf(
-                                                "role" to selectedRole,
-                                                "assigned_classes" to selectedClasses.toList()
-                                            )
-                                        ).await()
+                    // --- TOMBOL SAVE AMAN ---
+                    Button(
+                        onClick = {
+                            if (targetDocId.isBlank()) {
+                                Toast.makeText(context, "User belum termuat!", Toast.LENGTH_SHORT).show()
+                                return@Button
+                            }
+                            
+                            scope.launch {
+                                isSaving = true
+                                try {
+                                    // 🔥 FIX: Menggunakan HashMap explisit & SetOptions.merge()
+                                    // Ini mencegah error type inference dan aman untuk dokumen parsial
+                                    val updates = hashMapOf<String, Any>(
+                                        "assigned_classes" to selectedClasses.toList()
+                                    )
+                                    
+                                    db.collection(FirestorePaths.USERS)
+                                        .document(targetDocId)
+                                        .set(updates, SetOptions.merge()) 
+                                        .await()
                                         
-                                        Toast.makeText(context, "Akses Disimpan!", Toast.LENGTH_SHORT).show()
-                                        onBack()
-                                    } catch (e: Exception) {
-                                        Toast.makeText(context, "Gagal: ${e.message}", Toast.LENGTH_SHORT).show()
-                                        isSaving = false
-                                    }
+                                    Toast.makeText(context, "✅ Scope Berhasil Disimpan!", Toast.LENGTH_SHORT).show()
+                                    onBack()
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, "❌ Gagal: ${e.message}", Toast.LENGTH_LONG).show()
+                                } finally { 
+                                    isSaving = false 
                                 }
-                            },
-                            modifier = Modifier.padding(end = 8.dp)
-                        ) {
-                            Icon(Icons.Default.Save, null, modifier = Modifier.size(18.dp))
+                            }
+                        },
+                        // Disable tombol saat loading, saving, atau user tidak ditemukan
+                        enabled = !isLoading && !isSaving && targetDocId.isNotBlank(),
+                        colors = ButtonDefaults.buttonColors(containerColor = AzuraPrimary),
+                        modifier = Modifier.padding(end = 8.dp)
+                    ) {
+                        if (isSaving) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp), 
+                                color = Color.White, 
+                                strokeWidth = 2.dp
+                            )
                             Spacer(Modifier.width(8.dp))
+                            Text("Menyimpan...")
+                        } else {
+                            Icon(Icons.Default.Save, null)
+                            Spacer(Modifier.width(4.dp))
                             Text("Simpan")
                         }
-                    } else if (isSaving) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.padding(end = 16.dp).size(24.dp),
-                            strokeWidth = 2.dp
-                        )
                     }
                 }
             )
         }
     ) { padding ->
-        if (isLoading) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator()
-            }
-        } else {
-            Column(
-                modifier = Modifier
-                    .padding(padding)
-                    .padding(16.dp)
-                    .fillMaxSize()
-            ) {
-                // Search Bar
-                OutlinedTextField(
-                    value = searchQuery,
-                    onValueChange = { searchQuery = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("Cari Kelas...") },
-                    leadingIcon = { Icon(Icons.Default.Search, null) },
-                    trailingIcon = {
-                        if (searchQuery.isNotEmpty()) {
-                            IconButton(onClick = { searchQuery = "" }) {
-                                Icon(Icons.Default.Close, null)
-                            }
-                        }
-                    },
-                    singleLine = true,
-                    shape = MaterialTheme.shapes.medium
-                )
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                // Status Selection
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+        Column(
+            Modifier
+                .padding(padding)
+                .fillMaxSize()
+                .background(Color(0xFFF8F9FA))
+                .padding(16.dp)
+        ) {
+            // --- DIAGNOSTIK DB (Hanya muncul jika Rombel Kosong) ---
+            if (allClassNames.isEmpty() && !isLoading) {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF2D3436)),
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 16.dp)
                 ) {
+                    Column(Modifier.padding(16.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.BugReport, null, tint = Color.Yellow)
+                            Spacer(Modifier.width(8.dp))
+                            Text("DIAGNOSTIK SISTEM", color = Color.Yellow, fontWeight = FontWeight.Bold)
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = debugMessage, 
+                            color = Color.White, 
+                            fontSize = 11.sp, 
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                }
+            }
+
+            // --- SEARCH BAR ---
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                modifier = Modifier.fillMaxWidth(),
+                placeholder = { Text("Cari rombel...") },
+                leadingIcon = { Icon(Icons.Default.Search, null) },
+                shape = RoundedCornerShape(12.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedContainerColor = Color.White, 
+                    unfocusedContainerColor = Color.White
+                ),
+                singleLine = true
+            )
+
+            Spacer(Modifier.height(16.dp))
+            
+            // --- HEADER LIST & SELECT ALL ---
+            if (isLoading) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { 
+                    CircularProgressIndicator(color = AzuraPrimary) 
+                }
+            } else {
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        "Kelas Terpilih: ${selectedClasses.size}",
-                        style = MaterialTheme.typography.labelLarge,
+                        text = if (searchQuery.isEmpty()) "Pilih Unit (${selectedClasses.size})" else "Hasil Pencarian",
                         fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
+                        color = Color.DarkGray,
+                        modifier = Modifier.weight(1f)
                     )
                     
-                    if (selectedClasses.isNotEmpty()) {
-                        TextButton(onClick = { selectedClasses.clear() }) {
-                            Text("Reset")
+                    if (allClassNames.isNotEmpty()) {
+                        TextButton(onClick = {
+                            if (selectedClasses.containsAll(filteredClasses)) {
+                                selectedClasses.removeAll(filteredClasses)
+                            } else {
+                                // Hanya tambahkan yg belum ada agar tidak duplikat
+                                val newItems = filteredClasses.filter { !selectedClasses.contains(it) }
+                                selectedClasses.addAll(newItems)
+                            }
+                        }) {
+                            Text(if (selectedClasses.containsAll(filteredClasses)) "Lepas Semua" else "Pilih Semua")
                         }
                     }
                 }
+                
+                Spacer(Modifier.height(8.dp))
 
-                Divider(modifier = Modifier.padding(vertical = 8.dp))
-
-                // List Kelas
+                // --- DAFTAR KELAS (LAZY COLUMN) ---
                 LazyColumn(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.weight(1f)
                 ) {
-                    items(items = filteredClassNames, key = { it }) { className ->
-                        val isChecked = selectedClasses.contains(className)
-                        
-                        Surface(
-                            shape = MaterialTheme.shapes.small,
-                            color = if (isChecked) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    if (isChecked) selectedClasses.remove(className)
-                                    else selectedClasses.add(className)
-                                }
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Checkbox(
-                                    checked = isChecked,
-                                    onCheckedChange = { checked ->
-                                        if (checked) selectedClasses.add(className)
-                                        else selectedClasses.remove(className)
-                                    }
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = className,
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    fontWeight = if (isChecked) FontWeight.Bold else FontWeight.Normal
-                                )
-                            }
-                        }
-                    }
-                    
-                    if (filteredClassNames.isEmpty()) {
-                        item {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(32.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = if(searchQuery.isEmpty()) "Tidak ada data kelas." else "Kelas '$searchQuery' tidak ditemukan.",
-                                    color = Color.Gray
-                                )
-                            }
+                    items(items = filteredClasses, key = { it }) { className ->
+                        val isSelected = selectedClasses.contains(className)
+                        ClassSelectionItem(className, isSelected) {
+                            if (isSelected) selectedClasses.remove(className)
+                            else selectedClasses.add(className)
                         }
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+fun ClassSelectionItem(className: String, isSelected: Boolean, onToggle: () -> Unit) {
+    Card(
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isSelected) AzuraPrimary.copy(alpha = 0.1f) else Color.White
+        ),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onToggle() },
+        border = if (isSelected) BorderStroke(1.5.dp, AzuraPrimary) else BorderStroke(1.dp, Color(0xFFEEEEEE))
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp), 
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = if (isSelected) Icons.Default.CheckBox else Icons.Default.CheckBoxOutlineBlank,
+                contentDescription = null,
+                tint = if (isSelected) AzuraPrimary else Color.Gray
+            )
+            Spacer(Modifier.width(16.dp))
+            Text(
+                text = className,
+                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                color = if (isSelected) AzuraPrimary else Color.Black,
+                fontSize = 15.sp
+            )
         }
     }
 }
