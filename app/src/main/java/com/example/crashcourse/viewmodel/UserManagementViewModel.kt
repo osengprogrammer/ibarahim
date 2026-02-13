@@ -4,43 +4,28 @@ import android.app.Application
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.crashcourse.db.AppDatabase
 import com.example.crashcourse.firestore.user.FirestoreUser
-import com.example.crashcourse.firestore.user.UserProfile
+import com.example.crashcourse.repository.UserRepository
+import com.example.crashcourse.ui.management.SaveState     
+import com.example.crashcourse.ui.management.UserListState 
 import com.google.firebase.Timestamp
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.util.Calendar
-import java.util.HashMap // ✅ Wajib Import Java HashMap
+import java.util.HashMap
 
-// State untuk UI
-sealed class UserListState {
-    object Idle : UserListState()
-    object Loading : UserListState()
-    data class Success(val users: List<UserProfile>) : UserListState()
-    data class Error(val message: String) : UserListState()
-}
-
-// State Khusus untuk Operasi Simpan
-sealed class SaveState {
-    object Idle : SaveState()
-    object Loading : SaveState()
-    object Success : SaveState()
-    data class Error(val message: String) : SaveState()
-}
-
+/**
+ * 👨‍💼 UserManagementViewModel (V.6.0 - Anti-Stuck & Migration Ready)
+ * Mengelola daftar staff, undangan, dan pembaruan scope kelas.
+ */
 class UserManagementViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val userDao = AppDatabase.getInstance(application).userDao()
+    private val userRepo = UserRepository(application)
     
-    // State untuk List User
     private val _uiState = MutableStateFlow<UserListState>(UserListState.Idle)
     val uiState = _uiState.asStateFlow()
 
-    // State untuk Proses Simpan (Scope)
     private val _saveState = MutableStateFlow<SaveState>(SaveState.Idle)
     val saveState = _saveState.asStateFlow()
 
@@ -50,21 +35,21 @@ class UserManagementViewModel(application: Application) : AndroidViewModel(appli
 
     /**
      * 📥 FETCH USERS
+     * Mengambil daftar staff sekolah dari Firestore.
      */
     fun fetchUsers() {
         viewModelScope.launch {
             _uiState.value = UserListState.Loading
             try {
-                val currentAdmin = withContext(Dispatchers.IO) { userDao.getCurrentUser() }
+                val currentAdmin = userRepo.getCurrentUser() 
+                
                 if (currentAdmin == null) {
                     _uiState.value = UserListState.Error("Sesi Admin tidak ditemukan.")
                     return@launch
                 }
 
                 val mySekolahId = currentAdmin.sekolahId ?: ""
-                val userList = withContext(Dispatchers.IO) {
-                    FirestoreUser.fetchUsersBySchool(mySekolahId)
-                }
+                val userList = FirestoreUser.fetchUsersBySchool(mySekolahId)
                 
                 if (userList.isEmpty()) {
                     _uiState.value = UserListState.Error("Belum ada staff terdaftar.")
@@ -72,70 +57,67 @@ class UserManagementViewModel(application: Application) : AndroidViewModel(appli
                     _uiState.value = UserListState.Success(userList)
                 }
             } catch (e: Exception) {
-                _uiState.value = UserListState.Error("Gagal: ${e.message}")
+                Log.e("UserVM", "Fetch Error", e)
+                _uiState.value = UserListState.Error("Gagal mengambil data.")
             }
         }
     }
 
     /**
-     * 🚀 INVITE STAFF (VERSI ANTI-ERROR)
-     * Menggunakan HashMap manual (bukan hashMapOf) untuk menghindari error Serializable vs Pair.
+     * 🚀 INVITE STAFF (Updated for Migration Strategy)
+     * Membuat dokumen awal dengan ID Email sebagai "umpan" migrasi ke UID.
      */
     fun inviteStaff(email: String, role: String) {
         viewModelScope.launch {
             try {
-                val currentAdmin = withContext(Dispatchers.IO) { userDao.getCurrentUser() }
-                if (currentAdmin == null) return@launch
+                val currentAdmin = userRepo.getCurrentUser() ?: return@launch
 
+                // 🔥 Normalisasi email agar Document ID konsisten (lowercase)
+                val normalizedEmail = email.lowercase().trim()
                 val inheritedSekolahId = currentAdmin.sekolahId ?: ""
                 val inheritedSchoolName = currentAdmin.name ?: ""
 
-                val calendar = Calendar.getInstance()
-                calendar.add(Calendar.YEAR, 1) 
+                val calendar = Calendar.getInstance().apply { add(Calendar.YEAR, 1) }
 
-                // 🔥 SOLUSI UTAMA: Buat HashMap kosong, lalu isi satu per satu.
-                // Ini memaksa compiler menerima tipe data apa pun (Any) tanpa error.
-                val inviteData = HashMap<String, Any>()
-                
-                inviteData["email"] = email
-                inviteData["role"] = role
-                inviteData["sekolahId"] = inheritedSekolahId
-                inviteData["school_name"] = inheritedSchoolName
-                inviteData["status"] = "PENDING"
-                inviteData["isRegistered"] = false
-                inviteData["uid"] = ""
-                inviteData["device_id"] = ""
-                // List kosong aman dimasukkan sebagai Any
-                inviteData["assigned_classes"] = emptyList<String>() 
-                inviteData["expiry_date"] = Timestamp(calendar.time)
-                inviteData["created_at"] = System.currentTimeMillis()
-
-                // Kirim ke Repository
-                withContext(Dispatchers.IO) {
-                    FirestoreUser.inviteStaffByMap(email, inviteData)
+                val inviteData = HashMap<String, Any>().apply {
+                    put("email", normalizedEmail)
+                    put("role", role)
+                    put("sekolahId", inheritedSekolahId)
+                    put("school_name", inheritedSchoolName)
+                    put("status", "ACTIVE") // 🔥 Set ACTIVE agar tidak stuck di 'Status Waiting'
+                    put("isRegistered", false)
+                    put("uid", "") // Akan diisi otomatis oleh AuthViewModel saat login/migrasi
+                    put("device_id", "")
+                    put("assigned_classes", emptyList<String>())
+                    put("expiry_date", Timestamp(calendar.time))
+                    put("created_at", System.currentTimeMillis())
                 }
+
+                // Simpan dokumen dengan ID = Email
+                FirestoreUser.inviteStaffByMap(normalizedEmail, inviteData)
                 
-                Log.d("UserVM", "Berhasil invite $email")
-                fetchUsers() // Refresh list agar UI update
+                Log.d("UserVM", "✅ Berhasil invite: $normalizedEmail. Menunggu migrasi saat login.")
+                fetchUsers() 
 
             } catch (e: Exception) {
-                Log.e("UserVM", "Gagal invite: ${e.message}")
+                Log.e("UserVM", "❌ Gagal invite: ${e.message}")
             }
         }
     }
 
     /**
      * 💾 SAVE USER SCOPE
+     * Memperbarui daftar kelas. docId bisa berupa Email (sebelum migrasi) atau UID (setelah migrasi).
      */
     fun saveUserScope(docId: String, classes: List<String>) {
         viewModelScope.launch {
             _saveState.value = SaveState.Loading
-            
             try {
-                withContext(Dispatchers.IO) {
-                    FirestoreUser.updateUserScope(docId, classes)
-                }
+                FirestoreUser.updateUserScope(docId, classes)
                 _saveState.value = SaveState.Success
+                
+                // Refresh data lokal agar perubahan langsung terlihat di UI
+                fetchUsers() 
             } catch (e: Exception) {
                 Log.e("UserVM", "Gagal simpan scope", e)
                 _saveState.value = SaveState.Error(e.message ?: "Gagal menyimpan perubahan.")

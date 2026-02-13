@@ -1,32 +1,24 @@
 package com.example.crashcourse.viewmodel
 
+import android.app.Application
 import android.content.Context
-import android.graphics.BitmapFactory
 import android.net.Uri
-import androidx.lifecycle.ViewModel
+import android.util.Log
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.crashcourse.db.AppDatabase
-import com.example.crashcourse.db.FaceCache
-import com.example.crashcourse.db.FaceDao
-import com.example.crashcourse.db.FaceEntity
-import com.example.crashcourse.firestore.student.FirestoreStudent // ✅ NEW IMPORT
+import com.example.crashcourse.repository.RegisterRepository
 import com.example.crashcourse.utils.BulkPhotoProcessor
 import com.example.crashcourse.utils.CsvImportUtils
-import com.example.crashcourse.utils.NativeMath
-import com.example.crashcourse.utils.PhotoProcessingUtils
-import com.example.crashcourse.utils.PhotoStorageUtils
 import com.example.crashcourse.utils.ProcessResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * 📊 Azura Tech Register ViewModel
- * Handles bulk student registration via CSV with automated photo processing
- * and AI-based visual duplicate detection.
+ * 📦 State untuk memantau progres registrasi massal.
+ * Pastikan data class ini berada di level package agar bisa di-import oleh Screen.
  */
 data class ProcessingState(
     val isProcessing: Boolean = false,
@@ -41,201 +33,111 @@ data class ProcessingState(
     val currentPhotoSize: String = ""
 )
 
-class RegisterViewModel : ViewModel() {
+/**
+ * 👨‍💻 RegisterViewModel
+ * Menangani alur pendaftaran siswa massal via CSV & AI Photo Processing.
+ */
+class RegisterViewModel(application: Application) : AndroidViewModel(application) {
+
+    private val repo = RegisterRepository(application)
+    
     private val _state = MutableStateFlow(ProcessingState())
-    val state: StateFlow<ProcessingState> = _state.asStateFlow()
+    val state = _state.asStateFlow()
 
     /**
-     * Estimates processing time based on the photo sources in the CSV.
+     * ⏱️ PREPARE PROCESSING
+     * Menghitung estimasi waktu sebelum eksekusi dimulai.
+     * Memperbaiki error "Unresolved reference" di BulkRegistrationScreen.
      */
     fun prepareProcessing(context: Context, uri: Uri) {
         viewModelScope.launch {
-            withContext(Dispatchers.IO) {
-                try {
+            try {
+                // Jalankan proses berat di IO Thread
+                val estimateStr = withContext(Dispatchers.IO) {
                     val csvResult = CsvImportUtils.parseCsvFile(context, uri)
                     val photoSources = csvResult.students.map { it.photoUrl }
                     val seconds = BulkPhotoProcessor.estimateProcessingTime(photoSources)
-                    val estimate = when {
+                    
+                    when {
                         seconds > 120 -> "${seconds / 60} menit"
                         seconds > 60 -> "1 menit ${seconds % 60} detik"
                         else -> "$seconds detik"
                     }
-                    _state.value = _state.value.copy(estimatedTime = "Estimasi waktu: $estimate")
-                } catch (e: Exception) {
-                    _state.value = _state.value.copy(estimatedTime = "Estimasi tidak tersedia")
                 }
+                _state.value = _state.value.copy(estimatedTime = "Estimasi waktu: $estimateStr")
+            } catch (e: Exception) {
+                Log.e("RegisterVM", "Gagal hitung estimasi", e)
+                _state.value = _state.value.copy(estimatedTime = "Estimasi tidak tersedia")
             }
         }
     }
 
     /**
      * 🚀 MAIN BULK PROCESSOR
-     * Orchestrates CSV parsing, photo downloading, and biometric syncing.
+     * Mengorkestrasi pendaftaran dari CSV ke Local Database & Cloud.
      */
     fun processCsvFile(context: Context, uri: Uri) {
         viewModelScope.launch {
-            _state.value = ProcessingState(
-                isProcessing = true,
+            _state.value = _state.value.copy(
+                isProcessing = true, 
                 status = "Inisialisasi...",
-                estimatedTime = state.value.estimatedTime
+                results = emptyList() 
             )
-
-            withContext(Dispatchers.IO) {
-                try {
-                    val db = AppDatabase.getInstance(context)
-                    val currentUser = db.userDao().getCurrentUser()
-                    val sid = currentUser?.sekolahId ?: "UNKNOWN"
-
-                    if (sid == "UNKNOWN") {
-                        _state.value = _state.value.copy(
-                            isProcessing = false,
-                            status = "Error: Sesi sekolah tidak ditemukan."
-                        )
-                        return@withContext
-                    }
-
-                    val csvResult = CsvImportUtils.parseCsvFile(context, uri)
-                    val faceDao = db.faceDao()
-                    val existingFaces = faceDao.getAllFaces()
-                    val resultsList = mutableListOf<ProcessResult>()
-                    
-                    var success = 0
-                    var dupes = 0
-                    var errors = 0
-                    val totalStudents = csvResult.students.size
-
-                    csvResult.students.forEachIndexed { index, student ->
-                        try {
-                            _state.value = _state.value.copy(
-                                progress = (index + 1).toFloat() / totalStudents,
-                                status = "Memproses ${index + 1}/$totalStudents: ${student.name}"
-                            )
-
-                            val result = processStudent(context, student, sid, faceDao, existingFaces)
-                            
-                            if (result.isSuccess) success++ 
-                            else if (result.status.contains("Duplicate")) dupes++ 
-                            else errors++
-                            
-                            resultsList.add(result)
-                        } catch (e: Exception) {
-                            errors++
-                            resultsList.add(
-                                ProcessResult(
-                                    studentId = student.studentId, 
-                                    name = student.name, 
-                                    status = "Error", 
-                                    error = e.message
-                                )
-                            )
-                        }
-                    }
-
-                    // 🧠 Refresh Cache so scanner recognizes new students immediately
-                    FaceCache.refresh(context)
-
-                    _state.value = _state.value.copy(
-                        isProcessing = false,
-                        results = resultsList,
-                        successCount = success,
-                        duplicateCount = dupes,
-                        errorCount = errors,
-                        status = "Selesai: $success sukses, $dupes duplikat, $errors error"
-                    )
-                } catch (e: Exception) {
-                    _state.value = _state.value.copy(
-                        isProcessing = false, 
-                        status = "Terhenti: ${e.message}"
-                    )
-                }
-            }
-        }
-    }
-
-    private suspend fun processStudent(
-        context: Context,
-        student: CsvImportUtils.CsvStudentData,
-        sekolahId: String,
-        faceDao: FaceDao,
-        existingFacesCache: List<FaceEntity>
-    ): ProcessResult {
-        // 1. Primary Key Check
-        if (faceDao.getFaceByStudentId(student.studentId) != null) {
-            return ProcessResult(
-                studentId = student.studentId, 
-                name = student.name, 
-                status = "Duplicate ID", 
-                isSuccess = false
-            )
-        }
-
-        // 2. Photo & AI Embedding
-        val photoResult = BulkPhotoProcessor.processPhotoSource(context, student.photoUrl, student.studentId)
-        if (!photoResult.success) {
-            return ProcessResult(
-                studentId = student.studentId, 
-                name = student.name, 
-                status = "Photo Error", 
-                error = photoResult.error
-            )
-        }
-
-        val bitmap = BitmapFactory.decodeFile(photoResult.localPhotoUrl) 
-            ?: return ProcessResult(student.studentId, student.name, status = "Decode Error")
             
-        val embeddingResult = PhotoProcessingUtils.processBitmapForFaceEmbedding(context, bitmap) 
-            ?: return ProcessResult(student.studentId, student.name, status = "No Face Detected")
+            try {
+                // 1. Ambil data awal dari Repository
+                val sid = repo.getCurrentSekolahId() ?: throw Exception("Sesi tidak ditemukan")
+                val csvResult = withContext(Dispatchers.IO) { CsvImportUtils.parseCsvFile(context, uri) }
+                val existingFaces = repo.getAllLocalFaces()
+                val resultsList = mutableListOf<ProcessResult>()
+                
+                var success = 0
+                var dupes = 0
+                var errors = 0
+                val total = csvResult.students.size
 
-        val (faceBitmap, embedding) = embeddingResult
+                // 2. Loop proses siswa satu per satu
+                csvResult.students.forEachIndexed { index, student ->
+                    _state.value = _state.value.copy(
+                        progress = (index + 1).toFloat() / total,
+                        status = "Memproses ${index + 1}/$total: ${student.name}"
+                    )
 
-        // 3. AI Anti-Duplicate Check (Cosine Similarity)
-        for (face in existingFacesCache) {
-            if (NativeMath.cosineDistance(face.embedding, embedding) < 0.45f) {
-                return ProcessResult(
-                    studentId = student.studentId, 
-                    name = student.name, 
-                    status = "Duplicate Face: ${face.name}"
+                    // Panggil fungsi suspend di Repository
+                    val result = repo.processAndRegisterStudent(student, sid, existingFaces)
+                    
+                    if (result.isSuccess) success++ 
+                    else if (result.status.contains("Duplicate")) dupes++ 
+                    else errors++
+                    
+                    resultsList.add(result)
+                }
+
+                // 3. Refresh AI Cache agar scanner langsung mengenali wajah baru
+                repo.refreshFaceCache()
+
+                _state.value = _state.value.copy(
+                    isProcessing = false, 
+                    results = resultsList, 
+                    successCount = success, 
+                    duplicateCount = dupes, 
+                    errorCount = errors, 
+                    status = "Selesai: $success Sukses"
+                )
+            } catch (e: Exception) {
+                Log.e("RegisterVM", "Bulk Process Failed", e)
+                _state.value = _state.value.copy(
+                    isProcessing = false, 
+                    status = "Error: ${e.message}"
                 )
             }
         }
-
-        // 4. Persistence & Cloud Sync
-        val path = PhotoStorageUtils.saveFacePhoto(context, faceBitmap, student.studentId)
-        val faceEntity = FaceEntity(
-            studentId = student.studentId,
-            sekolahId = sekolahId,
-            name = student.name,
-            photoUrl = path ?: "",
-            embedding = embedding,
-            className = student.className ?: "Umum"
-        )
-        
-        // A. Save to Local Room
-        faceDao.insert(faceEntity)
-        
-        // B. Save to Cloud Firestore (Using Modular Repository)
-        // ✅ UPDATED: Use FirestoreStudent instead of FirestoreHelper
-        FirestoreStudent.uploadStudent(faceEntity)
-
-        return ProcessResult(
-            studentId = student.studentId, 
-            name = student.name, 
-            status = "Registered", 
-            isSuccess = true, 
-            photoSize = photoResult.processedSize
-        )
     }
 
+    /**
+     * 🧹 Reset state saat menutup layar atau memulai ulang.
+     */
     fun resetState() {
         _state.value = ProcessingState()
-    }
-
-    private fun formatFileSize(size: Long): String {
-        return when {
-            size == 0L -> "0 KB"
-            size < 1024 -> "$size B"
-            size < 1024 * 1024 -> "${size / 1024} KB"
-            else -> String.format("%.1f MB", size / (1024.0 * 1024.0))
-        }
     }
 }

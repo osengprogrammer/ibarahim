@@ -29,188 +29,140 @@ import com.example.crashcourse.scanner.FaceScanner
 import com.example.crashcourse.ui.components.FaceOverlay
 import com.example.crashcourse.ui.theme.*
 import com.example.crashcourse.utils.NativeMath
-import com.example.crashcourse.viewmodel.AuthState
-import com.example.crashcourse.viewmodel.AuthViewModel
-import com.example.crashcourse.viewmodel.FaceViewModel
+import com.example.crashcourse.viewmodel.*
 import kotlinx.coroutines.delay
 import java.util.*
 
 /**
- * 👁️ Azura Tech AI Check-In Screen
- * Fitur:
- * 1. Liveness Detection (Cegah foto HP)
- * 2. Scoped Recognition (Hanya siswa sekolah tsb)
- * 3. Anti-Spam (Cooldown 30 detik per siswa)
+ * 👁️ Azura Tech AI Check-In Screen (V.7.1 - Final Fixes)
+ * - TTS Scope Fixed
+ * - Face Box Visibility Fixed (Z-Ordering)
+ * - Threshold Strict (0.55f)
+ * - Blink Detection Disabled
  */
 @Composable
 fun CheckInScreen(
     useBackCamera: Boolean,
-    faceViewModel: FaceViewModel = viewModel(),
-    activeSession: String, // 🚀 Terima kiriman dari Dashboard
+    activeSession: String,
+    recognitionViewModel: RecognitionViewModel = viewModel(),
     authViewModel: AuthViewModel = viewModel()
 ) {
     val context = LocalContext.current
-    
-    // --- 🔐 AUTH & SESSION CONTEXT ---
     val authState by authViewModel.authState.collectAsStateWithLifecycle()
+    val attendanceResult by recognitionViewModel.attendanceState.collectAsStateWithLifecycle()
 
-    // Camera & UI States
+    // --- UI & CAMERA STATES ---
     var currentCameraIsBack by remember { mutableStateOf(useBackCamera) }
     var gallery by remember { mutableStateOf<List<Pair<String, FloatArray>>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var isLightBoostOn by remember { mutableStateOf(false) }
 
-    // Logic States
-    var matchName by remember { mutableStateOf<String?>(null) }
-    var alreadyCheckedIn by remember { mutableStateOf(false) }
-    var cooldownSeconds by remember { mutableIntStateOf(0) }
-    
-    // Liveness (Anti-Photo) States
-    // 0: Cari Wajah, 1: Wajah Ditemukan (Minta Kedip), 2: Kedip Terdeteksi (Verifikasi), 3: Selesai
-    var livenessState by remember { mutableIntStateOf(0) }
-    var livenessMessage by remember { mutableStateOf("Cari Wajah...") }
-
-    // Consensus (Agar tidak flicker)
-    var candidateName by remember { mutableStateOf<String?>(null) }
-    var stabilityCounter by remember { mutableIntStateOf(0) }
-    val REQUIRED_STABILITY = 2 // Butuh 2 frame berturut-turut yang sama
-
-    // Face Drawing States
+    // --- SCANNER VISUAL STATES ---
     var faceBounds by remember { mutableStateOf<List<Rect>>(emptyList()) }
     var imageSize by remember { mutableStateOf(IntSize.Zero) }
     var imageRotation by remember { mutableIntStateOf(0) }
 
-    // Anti-Spam & Audio
-    // Map lokal untuk mencegah spam request ke DB/Firestore (Cache session)
-    val checkInTimestamps = remember { mutableMapOf<String, Long>() }
+    // --- STABILITY CONTROL ---
+    var candidateName by remember { mutableStateOf<String?>(null) }
+    var stabilityCounter by remember { mutableIntStateOf(0) }
+    // Require 3 consistent frames to avoid flickering/false positives
+    val REQUIRED_STABILITY = 3 
+
     val toneGen = remember { ToneGenerator(AudioManager.STREAM_MUSIC, 100) }
     var tts by remember { mutableStateOf<TextToSpeech?>(null) }
 
-    // --- 🎙️ INITIALIZE TTS ---
+    // --- 🎙️ INITIALIZE TTS (FIXED SCOPE) ---
     DisposableEffect(Unit) {
-        val ttsInstance = TextToSpeech(context) { status ->
+        var ttsRef: TextToSpeech? = null
+        
+        // Initialize
+        ttsRef = TextToSpeech(context) { status ->
             if (status == TextToSpeech.SUCCESS) {
-                val result = tts?.setLanguage(Locale("id", "ID"))
-                if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
-                    Log.e("TTS", "Bahasa Indonesia tidak didukung")
-                }
+                // Safe call using the local reference
+                ttsRef?.language = Locale("id", "ID")
             }
         }
-        tts = ttsInstance
+        
+        // Assign to state
+        tts = ttsRef
+
+        // Cleanup
         onDispose {
-            ttsInstance.stop()
-            ttsInstance.shutdown()
+            ttsRef?.stop()
+            ttsRef?.shutdown()
         }
     }
 
-    // --- 📦 LOAD DATA SISWA (Scoped per Sekolah) ---
+    // --- 📦 LOAD DATA (Strict School Filter) ---
     LaunchedEffect(authState) {
         if (authState is AuthState.Active) {
             val user = authState as AuthState.Active
             loading = true
-            
-            // 🔄 Refresh RAM Cache dari DB Lokal
             FaceCache.refresh(context)
-            
-            // 🛡️ SECURITY FILTER: Hanya load embedding milik sekolah ini
-            val filteredFaces = FaceCache.getFaces().filter { face ->
-                val isSameSchool = face.sekolahId == user.sekolahId
-                // Jika Guru biasa (bukan Admin), filter berdasarkan kelas yg diajar (Opsional)
-                // val isScoped = if (user.role == "ADMIN") true else user.assignedClasses.contains(face.className)
-                
-                isSameSchool // && isScoped (Aktifkan jika ingin strict per kelas)
-            }
-
-            gallery = filteredFaces.map { it.name to it.embedding }
+            gallery = FaceCache.getFaces()
+                .filter { it.sekolahId == user.sekolahId }
+                .map { it.name to it.embedding }
             loading = false
-            Log.d("CheckInScreen", "Loaded ${gallery.size} faces for School: ${user.schoolName}")
         }
     }
 
-    // --- ⏲️ RESET TIMER UI ---
-    // Menghilangkan popup sukses setelah 3 detik
-    LaunchedEffect(matchName) {
-        if (matchName != null && !alreadyCheckedIn) {
-            delay(3000L)
-            matchName = null
-            livenessState = 0
-            stabilityCounter = 0
-            livenessMessage = "Cari Wajah..."
-        } else if (matchName != null && alreadyCheckedIn) {
-            // Jika cooldown, hilangkan lebih cepat
-            delay(2000L)
-            matchName = null
-        }
-    }
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color.Black)
-    ) {
-        if (loading || authState !is AuthState.Active) {
-            Column(
-                modifier = Modifier.align(Alignment.Center),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                CircularProgressIndicator(color = AzuraPrimary)
-                Spacer(modifier = Modifier.height(16.dp))
-                Text("Memuat Data Wajah...", color = Color.White)
+    // --- ⏲️ UI AUTO-RESET & AUDIO FEEDBACK ---
+    LaunchedEffect(attendanceResult) {
+        when (attendanceResult) {
+            is AttendanceResult.Success -> {
+                toneGen.startTone(ToneGenerator.TONE_PROP_ACK, 200)
+                val name = (attendanceResult as AttendanceResult.Success).name
+                tts?.speak("Selamat datang, $name", TextToSpeech.QUEUE_FLUSH, null, null)
+                delay(3000L)
+                recognitionViewModel.resetState()
+                stabilityCounter = 0
+                candidateName = null
             }
+            is AttendanceResult.Error, is AttendanceResult.Unauthorized, is AttendanceResult.Cooldown -> {
+                // Error tone
+                toneGen.startTone(ToneGenerator.TONE_PROP_BEEP, 200)
+                delay(3000L)
+                recognitionViewModel.resetState()
+                stabilityCounter = 0
+                candidateName = null
+            }
+            else -> {}
+        }
+    }
+
+    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+        if (loading || authState !is AuthState.Active) {
+            LoadingView(Modifier.align(Alignment.Center))
         } else {
             val activeUser = authState as AuthState.Active
 
-            // =================================================
-            // 1. SCANNER ENGINE (CAMERA PREVIEW)
-            // =================================================
+            // ==========================================
+            // 1. SCANNER ENGINE (Layer Paling Bawah)
+            // ==========================================
             FaceScanner(
                 useBackCamera = currentCameraIsBack,
                 enableLightBoost = isLightBoostOn
             ) { result ->
-                // Jika sedang menampilkan hasil sukses, pause scanning sebentar
-                if (matchName != null && !alreadyCheckedIn) return@FaceScanner
-
+                // Visual update (Face Box) harus jalan terus
                 faceBounds = result.bounds
                 imageSize = result.imageSize
                 imageRotation = result.rotation
 
+                // Stop logic processing if showing result
+                if (attendanceResult !is AttendanceResult.Idle) return@FaceScanner
+
                 val currentFace = result.bounds.firstOrNull()
-                
-                // --- KONDISI: TIDAK ADA WAJAH ---
                 if (currentFace == null) {
                     stabilityCounter = 0
-                    livenessState = 0
-                    livenessMessage = "Cari Wajah..."
+                    candidateName = null
                     return@FaceScanner
                 }
 
-                // --- DETEKSI KEDIP (LIVENESS) ---
-                // Ambang batas probabilitas mata terbuka (0.0 - 1.0)
-                val leftOpen = result.leftEyeOpenProb ?: 1.0f
-                val rightOpen = result.rightEyeOpenProb ?: 1.0f
-                
-                val eyesClosed = leftOpen < 0.25f && rightOpen < 0.25f
-                val eyesOpen = leftOpen > 0.85f && rightOpen > 0.85f
-
-                if (livenessState == 0) {
-                    livenessMessage = "Silakan Kedip 😉"
-                    if (eyesClosed) livenessState = 1 // Mata tertutup terdeteksi
-                } else if (livenessState == 1) {
-                    if (eyesOpen) {
-                        livenessState = 2 // Mata terbuka kembali -> VALID BLINK
-                        toneGen.startTone(ToneGenerator.TONE_PROP_BEEP, 100)
-                        livenessMessage = "Mengidentifikasi..."
-                    }
-                }
-
-                // --- PENGENALAN WAJAH (Hanya jika Liveness Lolos) ---
-                if (livenessState == 2 && result.embeddings.isNotEmpty()) {
+                if (result.embeddings.isNotEmpty()) {
                     val currentEmb = result.embeddings.first().second
-                    
                     var bestDist = 1.0f
                     var bestName: String? = null
 
-                    // 🔍 Linear Search di Gallery (Cukup cepat untuk < 500 siswa)
                     for ((name, dbEmb) in gallery) {
                         val dist = NativeMath.cosineDistance(dbEmb, currentEmb)
                         if (dist < bestDist) {
@@ -219,9 +171,8 @@ fun CheckInScreen(
                         }
                     }
 
-                    // Ambang Batas Kemiripan (0.4 - 0.6 biasanya optimal untuk MobileFaceNet)
-                    // Semakin kecil = semakin ketat.
-                    val THRESHOLD = 0.65f 
+                    // 🔥 THRESHOLD DIPERKETAT (0.55f)
+                    val THRESHOLD = 0.55f 
 
                     if (bestDist < THRESHOLD && bestName != null) {
                         if (bestName == candidateName) {
@@ -231,47 +182,19 @@ fun CheckInScreen(
                             stabilityCounter = 1
                         }
 
-                        // Butuh konsistensi beberapa frame agar tidak salah baca
                         if (stabilityCounter >= REQUIRED_STABILITY) {
-                            val now = System.currentTimeMillis()
-                            val lastCheck = checkInTimestamps[bestName] ?: 0L
-                            val diff = now - lastCheck
-                            val COOLDOWN_MS = 30_000L // 30 Detik Cooldown
-
-                            if (diff > COOLDOWN_MS) {
-                                // ✅ SUKSES CHECK-IN
-                                checkInTimestamps[bestName] = now
-                                
-                                // Panggil ViewModel untuk simpan ke Room & Firestore
-                                faceViewModel.saveCheckInWithSession(
-            name = bestName,
-            activeSession = activeSession // 👈 Gunakan sesi dari Dashboard
-        )
-                                
-                                matchName = bestName
-                                alreadyCheckedIn = false
-                                toneGen.startTone(ToneGenerator.TONE_PROP_ACK, 200)
-                                tts?.speak("Selamat datang, $bestName", TextToSpeech.QUEUE_FLUSH, null, null)
-                            } else {
-                                // ⏳ SPAM DETECTED
-                                matchName = bestName
-                                alreadyCheckedIn = true
-                                cooldownSeconds = ((COOLDOWN_MS - diff) / 1000).toInt()
-                            }
-                            
-                            // Reset state scanning setelah match ditemukan
-                            livenessState = 0 
-                            stabilityCounter = 0
+                            recognitionViewModel.processRecognition(bestName, activeSession)
                         }
-                    } else if (bestDist > 0.80f) {
-                        livenessMessage = "Wajah Tidak Dikenal"
+                    } else {
+                        // Reset if face is detected but not recognized within threshold
+                        stabilityCounter = 0
                     }
                 }
             }
 
-            // =================================================
-            // 2. OVERLAY LAYER (KOTAK WAJAH)
-            // =================================================
+            // ==========================================
+            // 2. OVERLAY LAYER (Layer Tengah - Wajib di sini)
+            // ==========================================
             FaceOverlay(
                 faceBounds = faceBounds,
                 imageSize = imageSize,
@@ -280,144 +203,166 @@ fun CheckInScreen(
                 modifier = Modifier.fillMaxSize()
             )
 
-            // =================================================
-            // 3. UI HUD & FEEDBACK
-            // =================================================
-            Box(
+            // ==========================================
+            // 3. UI HUD & RESULTS (Layer Paling Atas)
+            // ==========================================
+            
+            // Top Bar
+            CheckInHUD(
+                schoolName = activeUser.schoolName,
+                statusMessage = getStatusMessage(attendanceResult),
+                isFlashOn = isLightBoostOn,
+                onFlashToggle = { isLightBoostOn = !isLightBoostOn },
+                onCameraFlip = { currentCameraIsBack = !currentCameraIsBack }
+            )
+
+            // Bottom Result Card
+            AttendanceResultCard(
+                result = attendanceResult,
+                activeSession = activeSession,
                 modifier = Modifier
-                    .fillMaxSize()
-                    .padding(24.dp)
-            ) {
-                
-                // --- TOP BAR ---
-                Row(
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    // Info Sekolah & Status
-                    Card(
-                        colors = CardDefaults.cardColors(
-                            containerColor = Color.Black.copy(alpha = 0.6f)
-                        ),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-                            Text(
-                                text = activeUser.schoolName.uppercase(),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = AzuraAccent,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                text = livenessMessage,
-                                color = when(livenessState) {
-                                    0 -> Color.White
-                                    1 -> Color.Yellow
-                                    2 -> Color.Green
-                                    else -> Color.White
-                                },
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
-                    }
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 32.dp)
+            )
+        }
+    }
+}
 
-                    // Tombol Kontrol (Flash & Camera Switch)
-                    Row {
-                        IconButton(
-                            onClick = { isLightBoostOn = !isLightBoostOn },
-                            modifier = Modifier
-                                .background(
-                                    if (isLightBoostOn) Color.Yellow.copy(0.3f) else Color.Black.copy(0.6f), 
-                                    shape = RoundedCornerShape(50)
-                                )
-                        ) {
-                            Icon(
-                                Icons.Outlined.WbSunny, 
-                                contentDescription = "Flash", 
-                                tint = if (isLightBoostOn) Color.Yellow else Color.White
-                            )
-                        }
-                        Spacer(Modifier.width(8.dp))
-                        IconButton(
-                            onClick = { currentCameraIsBack = !currentCameraIsBack },
-                            modifier = Modifier
-                                .background(Color.Black.copy(0.6f), shape = RoundedCornerShape(50))
-                        ) {
-                            Icon(
-                                Icons.Default.FlipCameraAndroid, 
-                                contentDescription = "Switch Cam", 
-                                tint = Color.White
-                            )
-                        }
-                    }
-                }
+// --- 🏗️ MODULAR UI COMPONENTS ---
 
-                // --- BOTTOM RESULT CARD ---
-                AnimatedVisibility(
-                    visible = matchName != null,
-                    enter = slideInVertically { it } + fadeIn(),
-                    exit = slideOutVertically { it } + fadeOut(),
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(bottom = 32.dp)
-                ) {
-                    Card(
-                        colors = CardDefaults.cardColors(
-                            containerColor = if (alreadyCheckedIn) Color(0xFF333333) else AzuraPrimary
-                        ),
-                        shape = RoundedCornerShape(24.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .shadow(16.dp, RoundedCornerShape(24.dp))
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(20.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                imageVector = if (alreadyCheckedIn) Icons.Default.Timer else Icons.Default.CheckCircle,
-                                contentDescription = null,
-                                tint = if (alreadyCheckedIn) Color.Yellow else Color.White,
-                                modifier = Modifier.size(48.dp)
-                            )
-                            Spacer(Modifier.width(16.dp))
-                            Column {
-                                Text(
-                                    text = if (alreadyCheckedIn) "SUDAH ABSEN HARI INI" else "ABSENSI BERHASIL",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = if (alreadyCheckedIn) Color.Yellow else Color.White.copy(0.8f)
-                                )
-                                Text(
-                                    text = matchName ?: "",
-                                    style = MaterialTheme.typography.headlineSmall,
-                                    color = Color.White,
-                                    fontWeight = FontWeight.Bold
-                                )
+@Composable
+fun LoadingView(modifier: Modifier) {
+    Column(modifier = modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        CircularProgressIndicator(color = AzuraPrimary)
+        Spacer(modifier = Modifier.height(16.dp))
+        Text("Menyiapkan AI Scanner...", color = Color.White)
+    }
+}
 
-                                // --- 🚀 TAMBAHAN: NAMA ROMBEL/SESI ---
+@Composable
+fun CheckInHUD(
+    schoolName: String,
+    statusMessage: String,
+    isFlashOn: Boolean,
+    onFlashToggle: () -> Unit,
+    onCameraFlip: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(24.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Card(
+            colors = CardDefaults.cardColors(containerColor = Color.Black.copy(0.6f)),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
                 Text(
-                    text = activeSession, // Menampilkan Rombel yang dipilih dari Dashboard
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = AzuraAccent, // Gunakan warna aksen agar beda dengan nama
-                    fontWeight = FontWeight.SemiBold
+                    text = schoolName.uppercase(), 
+                    style = MaterialTheme.typography.labelSmall, 
+                    color = AzuraAccent, 
+                    fontWeight = FontWeight.Bold
                 )
-                                if (alreadyCheckedIn) {
-                                    Text(
-                                        text = "Dapat absen lagi dalam ${cooldownSeconds}s",
-                                        color = Color.White.copy(0.6f),
-                                        style = MaterialTheme.typography.bodySmall
-                                    )
-                                }
-                            }
-                        }
+                Text(
+                    text = statusMessage, 
+                    color = Color.White, 
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+        }
+        Row {
+            IconButton(
+                onClick = onFlashToggle, 
+                modifier = Modifier.background(
+                    if (isFlashOn) Color.Yellow.copy(0.3f) else Color.Black.copy(0.6f), 
+                    RoundedCornerShape(50)
+                )
+            ) {
+                Icon(Icons.Outlined.WbSunny, null, tint = if (isFlashOn) Color.Yellow else Color.White)
+            }
+            Spacer(Modifier.width(8.dp))
+            IconButton(
+                onClick = onCameraFlip, 
+                modifier = Modifier.background(Color.Black.copy(0.6f), RoundedCornerShape(50))
+            ) {
+                Icon(Icons.Default.FlipCameraAndroid, null, tint = Color.White)
+            }
+        }
+    }
+}
+
+@Composable
+fun AttendanceResultCard(result: AttendanceResult, activeSession: String, modifier: Modifier) {
+    AnimatedVisibility(
+        visible = result !is AttendanceResult.Idle,
+        enter = slideInVertically { it } + fadeIn(),
+        exit = slideOutVertically { it } + fadeOut(),
+        modifier = modifier
+    ) {
+        val containerColor = when(result) {
+            is AttendanceResult.Success -> AzuraPrimary
+            is AttendanceResult.Unauthorized -> Color(0xFFD32F2F)
+            is AttendanceResult.Cooldown -> Color(0xFF454545)
+            is AttendanceResult.Error -> Color.DarkGray
+            else -> Color.Gray
+        }
+
+        Card(
+            colors = CardDefaults.cardColors(containerColor = containerColor),
+            shape = RoundedCornerShape(24.dp),
+            modifier = Modifier
+                .fillMaxWidth(0.9f)
+                .shadow(16.dp, RoundedCornerShape(24.dp))
+        ) {
+            Row(Modifier.padding(20.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = when(result) {
+                        is AttendanceResult.Success -> Icons.Default.CheckCircle
+                        is AttendanceResult.Unauthorized -> Icons.Default.Block
+                        is AttendanceResult.Cooldown -> Icons.Default.Timer
+                        else -> Icons.Default.Info
+                    },
+                    contentDescription = null, 
+                    tint = Color.White, 
+                    modifier = Modifier.size(48.dp)
+                )
+                Spacer(Modifier.width(16.dp))
+                Column {
+                    val title = when(result) {
+                        is AttendanceResult.Success -> "ABSENSI BERHASIL"
+                        is AttendanceResult.Unauthorized -> "AKSES DITOLAK"
+                        is AttendanceResult.Cooldown -> "SUDAH ABSEN"
+                        is AttendanceResult.Error -> "SYSTEM ERROR"
+                        else -> ""
+                    }
+                    val name = when(result) {
+                        is AttendanceResult.Success -> result.name
+                        is AttendanceResult.Unauthorized -> result.name
+                        is AttendanceResult.Cooldown -> result.name
+                        is AttendanceResult.Error -> result.message
+                        else -> ""
+                    }
+                    Text(title, style = MaterialTheme.typography.labelSmall, color = Color.White.copy(0.8f))
+                    Text(name, style = MaterialTheme.typography.headlineSmall, color = Color.White, fontWeight = FontWeight.Bold)
+                    Text(activeSession, style = MaterialTheme.typography.bodyMedium, color = AzuraAccent)
+                    if (result is AttendanceResult.Unauthorized) {
+                        Text("Bukan siswa kelas ini", style = MaterialTheme.typography.labelSmall, color = Color.White)
                     }
                 }
             }
         }
+    }
+}
+
+private fun getStatusMessage(result: AttendanceResult): String {
+    return when(result) {
+        is AttendanceResult.Idle -> "Mencari Wajah..."
+        is AttendanceResult.Loading -> "Mengidentifikasi..."
+        is AttendanceResult.Success -> "Berhasil!"
+        is AttendanceResult.Unauthorized -> "Salah Kelas!"
+        is AttendanceResult.Cooldown -> "Sudah Absen"
+        is AttendanceResult.Error -> "Gagal"
     }
 }

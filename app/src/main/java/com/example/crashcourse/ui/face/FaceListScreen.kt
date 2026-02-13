@@ -24,16 +24,11 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import com.example.crashcourse.db.FaceEntity
 import com.example.crashcourse.db.MasterClassWithNames
+import com.example.crashcourse.ui.SyncState
 import com.example.crashcourse.ui.components.*
 import com.example.crashcourse.ui.theme.AzuraPrimary
 import com.example.crashcourse.viewmodel.*
-import java.time.LocalDate
 
-/**
- * 🏛️ Azura Tech Database Personel (Face List)
- * Layar pusat manajemen biometrik siswa/personel.
- * Bebas dari ketergantungan paket Management Account.
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FaceListScreen(
@@ -43,47 +38,26 @@ fun FaceListScreen(
     syncVM: SyncViewModel = viewModel(),
     masterClassVM: MasterClassViewModel = viewModel()
 ) {
-    val faces by faceVM.faceList.collectAsStateWithLifecycle()
+    // 🔥 DATA DARI VIEWMODEL (Reactive & Scoped)
+    val faces by faceVM.filteredFaces.collectAsStateWithLifecycle()
     val syncState by syncVM.syncState.collectAsStateWithLifecycle()
     val masterClasses by masterClassVM.masterClassesWithNames.collectAsStateWithLifecycle(initialValue = emptyList())
+    
+    // 🔥 FILTER STATES (Dihubungkan ke ViewModel)
+    val searchQuery by faceVM.searchQuery.collectAsStateWithLifecycle()
+    val selectedUnit by faceVM.selectedUnit.collectAsStateWithLifecycle()
 
-    // --- 🔍 FILTER STATES ---
-    var selectedUnit by remember { mutableStateOf<MasterClassWithNames?>(null) }
-    var searchQuery by remember { mutableStateOf("") }
-    var startDate by remember { mutableStateOf<LocalDate?>(null) }
-    var endDate by remember { mutableStateOf<LocalDate?>(null) }
-
-    // --- 🧠 FILTER LOGIC ---
-    val filteredFaces = remember(faces, selectedUnit, searchQuery) {
-        faces.filter { face ->
-            val matchUnit = selectedUnit == null || face.className == selectedUnit?.className
-            val matchSearch = searchQuery.isEmpty() || 
-                             face.name.contains(searchQuery, ignoreCase = true) || 
-                             face.studentId.contains(searchQuery)
-            matchUnit && matchSearch
-        }
+    // 🚀 AUTO-SYNC SAAT LAYAR DIBUKA
+    LaunchedEffect(Unit) {
+        syncVM.syncStudentsDown()
     }
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("Database Personel", fontWeight = FontWeight.Bold) },
-                navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, "Kembali")
-                    }
-                },
-                actions = {
-                    if (syncState is SyncState.Loading) {
-                        CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp, color = AzuraPrimary)
-                        Spacer(Modifier.width(16.dp))
-                    } else {
-                        IconButton(onClick = { syncVM.syncStudentsDown() }) {
-                            Icon(Icons.Default.CloudSync, "Sync Data", tint = AzuraPrimary)
-                        }
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.White)
+            FaceTopBar(
+                syncState = syncState,
+                onBack = onNavigateBack,
+                onSync = { syncVM.syncStudentsDown() }
             )
         }
     ) { padding ->
@@ -93,157 +67,169 @@ fun FaceListScreen(
                 .fillMaxSize()
                 .background(Color(0xFFF5F5F5))
         ) {
-            // --- 🛠️ SECTION: SEARCH & FILTER ---
-            Card(
-                modifier = Modifier.fillMaxWidth().padding(16.dp),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = Color.White),
-                elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
-            ) {
-                Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    AzuraInput(
-                        value = searchQuery,
-                        onValueChange = { searchQuery = it },
-                        label = "Cari Nama atau ID",
-                        leadingIcon = Icons.Default.Search
-                    )
+            // --- 🛠️ COMPONENT: FILTER CARD ---
+            FaceFilterSection(
+                searchQuery = searchQuery,
+                selectedUnit = selectedUnit,
+                masterClasses = masterClasses,
+                onQueryChange = { faceVM.updateSearchQuery(it) },
+                onUnitSelected = { faceVM.updateSelectedUnit(it) },
+                onReset = { faceVM.resetFilters() }
+            )
 
-                    AzuraDropdown(
-                        label = "Unit / Kelas",
-                        options = masterClasses,
-                        selected = selectedUnit,
-                        onSelected = { selectedUnit = it },
-                        itemLabel = { it.className }
-                    )
+            // --- 📑 COMPONENT: LIST CONTENT ---
+            FaceListContent(
+                faces = faces,
+                isFiltering = searchQuery.isNotEmpty() || selectedUnit != null,
+                onEdit = onNavigateToEdit,
+                onDelete = { faceVM.deleteFace(it) }
+            )
+        }
 
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        AzuraDatePicker(
-                            label = "Mulai",
-                            selectedDate = startDate,
-                            onDateSelected = { startDate = it },
-                            modifier = Modifier.weight(1f)
-                        )
+        // Overlay Sync Status (Floating)
+        SyncOverlay(
+            syncState = syncState,
+            onDismiss = { syncVM.resetState() }
+        )
+    }
+}
 
-                        AzuraDatePicker(
-                            label = "Selesai",
-                            selectedDate = endDate,
-                            onDateSelected = { endDate = it },
-                            modifier = Modifier.weight(1f),
-                            minDate = startDate,
-                            maxDate = startDate?.plusDays(30) 
-                        )
-                    }
+// ==========================================
+// 🛠️ SUB-COMPONENTS (Pecahan UI)
+// ==========================================
 
-                    TextButton(
-                        onClick = { 
-                            selectedUnit = null
-                            startDate = null
-                            endDate = null
-                            searchQuery = "" 
-                        },
-                        modifier = Modifier.align(Alignment.End)
-                    ) {
-                        Icon(Icons.Default.FilterAltOff, null, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(8.dp))
-                        Text("Reset Filter")
-                    }
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun FaceTopBar(syncState: SyncState, onBack: () -> Unit, onSync: () -> Unit) {
+    TopAppBar(
+        title = { Text("Database Personel", fontWeight = FontWeight.Bold) },
+        navigationIcon = {
+            IconButton(onClick = onBack) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, "Kembali")
+            }
+        },
+        actions = {
+            if (syncState is SyncState.Loading) {
+                CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp, color = AzuraPrimary)
+                Spacer(Modifier.width(16.dp))
+            } else {
+                IconButton(onClick = onSync) {
+                    Icon(Icons.Default.CloudSync, "Sync Data", tint = AzuraPrimary)
                 }
             }
+        },
+        colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.White)
+    )
+}
 
-            // --- 📑 SECTION: DATA LIST ---
-            Box(modifier = Modifier.weight(1f)) {
-                if (filteredFaces.isEmpty()) {
-                    EmptyFacesView(isFiltering = selectedUnit != null || searchQuery.isNotEmpty())
-                } else {
-                    LazyColumn(
-                        contentPadding = PaddingValues(16.dp, 16.dp, 16.dp, 80.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                        modifier = Modifier.fillMaxSize()
-                    ) {
-                        items(filteredFaces, key = { it.studentId }) { face ->
-                            StudentListItem(
-                                face = face,
-                                onEdit = { onNavigateToEdit(face.studentId) },
-                                onDelete = { faceVM.deleteFace(face) }
-                            )
-                        }
-                    }
-                }
+@Composable
+fun FaceFilterSection(
+    searchQuery: String,
+    selectedUnit: MasterClassWithNames?,
+    masterClasses: List<MasterClassWithNames>,
+    onQueryChange: (String) -> Unit,
+    onUnitSelected: (MasterClassWithNames?) -> Unit,
+    onReset: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(16.dp),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.White),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            AzuraInput(
+                value = searchQuery,
+                onValueChange = onQueryChange,
+                label = "Cari Nama atau ID",
+                leadingIcon = Icons.Default.Search
+            )
 
-                // 🚀 FIX: Sinkronisasi Status (Penyebab Compile Error sebelumnya)
-                // Kita pindahkan ke Box scope yang lebih aman dan menggunakan AnimatedVisibility standar
-                Box(
-                    modifier = Modifier.fillMaxSize().padding(16.dp), 
-                    contentAlignment = Alignment.BottomCenter
-                ) {
-                    androidx.compose.animation.AnimatedVisibility(
-                        visible = syncState !is SyncState.Idle,
-                        enter = fadeIn() + slideInVertically { it },
-                        exit = fadeOut() + slideOutVertically { it }
-                    ) {
-                        SyncStatusCard(
-                            state = syncState, 
-                            onDismiss = { syncVM.resetState() }
-                        )
-                    }
+            AzuraDropdown(
+                label = "Unit / Kelas",
+                options = masterClasses,
+                selected = selectedUnit?.className ?: "",
+                onSelected = { onUnitSelected(it as? MasterClassWithNames) },
+                itemLabel = { (it as? MasterClassWithNames)?.className ?: "" }
+            )
+
+            TextButton(
+                onClick = onReset,
+                modifier = Modifier.align(Alignment.End)
+            ) {
+                Icon(Icons.Default.FilterAltOff, null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Reset Filter")
+            }
+        }
+    }
+}
+
+@Composable
+fun ColumnScope.FaceListContent(
+    faces: List<FaceEntity>,
+    isFiltering: Boolean,
+    onEdit: (String) -> Unit,
+    onDelete: (FaceEntity) -> Unit
+) {
+    Box(modifier = Modifier.weight(1f)) {
+        if (faces.isEmpty()) {
+            EmptyFacesView(isFiltering = isFiltering)
+        } else {
+            LazyColumn(
+                contentPadding = PaddingValues(16.dp, 16.dp, 16.dp, 80.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                modifier = Modifier.fillMaxSize()
+            ) {
+                items(faces, key = { it.studentId }) { face ->
+                    StudentListItem(
+                        face = face,
+                        onEdit = { onEdit(face.studentId) },
+                        onDelete = { onDelete(face) }
+                    )
                 }
             }
         }
     }
 }
 
-/**
- * 🎨 KOMPONEN MANDIRI: StudentListItem
- */
 @Composable
-fun StudentListItem(
-    face: FaceEntity,
-    onEdit: () -> Unit,
-    onDelete: () -> Unit
-) {
+fun StudentListItem(face: FaceEntity, onEdit: () -> Unit, onDelete: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = Color.White),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
         shape = RoundedCornerShape(16.dp)
     ) {
-        Row(
-            modifier = Modifier.padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
+        Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             AsyncImage(
                 model = face.photoUrl,
                 contentDescription = null,
-                modifier = Modifier
-                    .size(50.dp)
-                    .clip(CircleShape)
-                    .background(Color.LightGray),
+                modifier = Modifier.size(50.dp).clip(CircleShape).background(Color.LightGray),
                 contentScale = ContentScale.Crop
             )
-            
             Spacer(modifier = Modifier.width(16.dp))
-            
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = face.name,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
-                )
-                Text(
-                    text = "ID: ${face.studentId} • ${face.className}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = Color.Gray
-                )
+                Text(text = face.name, fontWeight = FontWeight.Bold)
+                Text(text = "ID: ${face.studentId} • ${face.className}", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
             }
-            
             Row {
-                IconButton(onClick = onEdit) {
-                    Icon(Icons.Default.Edit, "Edit", tint = AzuraPrimary)
-                }
-                IconButton(onClick = onDelete) {
-                    Icon(Icons.Default.Delete, "Hapus", tint = MaterialTheme.colorScheme.error)
-                }
+                IconButton(onClick = onEdit) { Icon(Icons.Default.Edit, null, tint = AzuraPrimary) }
+                IconButton(onClick = onDelete) { Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error) }
             }
+        }
+    }
+}
+
+@Composable
+fun SyncOverlay(syncState: SyncState, onDismiss: () -> Unit) {
+    Box(modifier = Modifier.fillMaxSize().padding(16.dp), contentAlignment = Alignment.BottomCenter) {
+        AnimatedVisibility(
+            visible = syncState !is SyncState.Idle,
+            enter = fadeIn() + slideInVertically { it },
+            exit = fadeOut() + slideOutVertically { it }
+        ) {
+            SyncStatusCard(state = syncState, onDismiss = onDismiss)
         }
     }
 }
@@ -256,28 +242,17 @@ fun SyncStatusCard(state: SyncState, onDismiss: () -> Unit) {
         else -> AzuraPrimary
     }
 
-    Surface(
-        color = color,
-        shape = RoundedCornerShape(12.dp),
-        shadowElevation = 8.dp
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
+    Surface(color = color, shape = RoundedCornerShape(12.dp), shadowElevation = 8.dp) {
+        Row(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             val message = when (state) {
                 is SyncState.Loading -> state.message
                 is SyncState.Success -> state.message
                 is SyncState.Error -> state.message
                 else -> ""
             }
-            
-            Text(text = message, color = Color.White, style = MaterialTheme.typography.bodyMedium)
-            Spacer(Modifier.width(12.dp))
+            Text(text = message, color = Color.White)
             if (state !is SyncState.Loading) {
-                IconButton(onClick = onDismiss, modifier = Modifier.size(24.dp)) {
-                    Icon(Icons.Default.Close, null, tint = Color.White, modifier = Modifier.size(16.dp))
-                }
+                IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, null, tint = Color.White) }
             }
         }
     }
@@ -285,22 +260,9 @@ fun SyncStatusCard(state: SyncState, onDismiss: () -> Unit) {
 
 @Composable
 fun EmptyFacesView(isFiltering: Boolean) {
-    Column(
-        modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Icon(
-            imageVector = if (isFiltering) Icons.Default.SearchOff else Icons.Default.PeopleOutline,
-            contentDescription = null, 
-            modifier = Modifier.size(80.dp), 
-            tint = Color.LightGray
-        )
+    Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+        Icon(imageVector = if (isFiltering) Icons.Default.SearchOff else Icons.Default.PeopleOutline, contentDescription = null, modifier = Modifier.size(80.dp), tint = Color.LightGray)
         Spacer(Modifier.height(16.dp))
-        Text(
-            text = if (isFiltering) "Pencarian tidak ditemukan" else "Database personel kosong",
-            style = MaterialTheme.typography.bodyLarge,
-            color = Color.Gray
-        )
+        Text(text = if (isFiltering) "Pencarian tidak ditemukan" else "Database personel kosong", color = Color.Gray)
     }
 }

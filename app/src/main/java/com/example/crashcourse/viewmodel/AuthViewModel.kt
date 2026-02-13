@@ -6,13 +6,14 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.crashcourse.db.AppDatabase
 import com.example.crashcourse.db.UserEntity
+import com.example.crashcourse.firestore.auth.FirestoreAuth
+import com.example.crashcourse.firestore.user.UserProfile
 import com.example.crashcourse.util.DeviceUtil
 import com.google.firebase.Timestamp
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.ktx.auth
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FirebaseFirestore
-import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.ktx.Firebase
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -21,20 +22,19 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.tasks.await
 import java.util.*
 
+/**
+ * 🔐 AuthViewModel (V.7.5)
+ * Mengelola siklus hidup autentikasi, pendaftaran, dan migrasi dokumen (Email -> UID).
+ */
 class AuthViewModel(application: Application) : AndroidViewModel(application) {
 
     private val auth: FirebaseAuth = Firebase.auth
-    private val db = FirebaseFirestore.getInstance()
     private val database = AppDatabase.getInstance(application)
-    private val userDao = database.userDao()
-
-    // Mendapatkan Device ID unik untuk fitur penguncian perangkat
     private val currentDeviceId = DeviceUtil.getUniqueDeviceId(application)
     
-    private var statusListener: ListenerRegistration? = null
+    private var statusListener: com.google.firebase.firestore.ListenerRegistration? = null
     private var syncJob: Job? = null
 
-    // State utama aplikasi
     private val _authState = MutableStateFlow<AuthState>(AuthState.Checking)
     val authState: StateFlow<AuthState> = _authState.asStateFlow()
 
@@ -42,77 +42,55 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         checkCurrentUser()
     }
 
-    // ----------------------------------------------------
-    // 1. SESSION CHECK (Saat Aplikasi Dibuka)
-    // ----------------------------------------------------
-
     private fun checkCurrentUser() {
         val currentUser = auth.currentUser
         if (currentUser != null) {
             _authState.value = AuthState.Loading("Memulihkan Sesi...")
-            // Cari tahu dulu ID dokumennya (Email atau UID)
             identifyAndListen(currentUser.uid, currentUser.email)
         } else {
             _authState.value = AuthState.LoggedOut
         }
     }
 
-    // ----------------------------------------------------
-    // 2. LOGIN (Email & Password)
-    // ----------------------------------------------------
-
     fun login(email: String, pass: String) {
         if (email.isBlank() || pass.isBlank()) {
-            _authState.value = AuthState.Error("Email dan Password tidak boleh kosong.")
+            _authState.value = AuthState.Error("Email dan Password wajib diisi.")
             return
         }
-
         viewModelScope.launch {
-            _authState.value = AuthState.Loading("Menghubungkan ke Azura Cloud...")
+            _authState.value = AuthState.Loading("Otentikasi...")
             try {
-                // 1. Login Authentication
                 auth.signInWithEmailAndPassword(email, pass).await()
-                val user = auth.currentUser ?: throw Exception("User null setelah login")
-                
-                // 2. Tentukan Dokumen User & Mulai Listen
+                val user = auth.currentUser ?: throw Exception("User tidak ditemukan")
                 identifyAndListen(user.uid, user.email)
-
             } catch (e: Exception) {
-                Log.e("AzuraAuth", "Login Gagal", e)
-                _authState.value = AuthState.Error("Login Gagal: Periksa Email/Password.")
+                _authState.value = AuthState.Error("Login Gagal: Periksa kembali email/password.")
             }
         }
     }
 
-    // ----------------------------------------------------
-    // 3. REGISTER (SMART CHECK: STAFF VS ADMIN)
-    // ----------------------------------------------------
+    // ==========================================
+    // 📝 REGISTER LOGIC (Fix Unresolved Reference)
+    // ==========================================
 
     fun register(email: String, pass: String, schoolNameInput: String) {
-
         viewModelScope.launch {
-            _authState.value = AuthState.Loading("Memeriksa status undangan...")
-
+            _authState.value = AuthState.Loading("Memeriksa status pendaftaran...")
             try {
-                // 1️⃣ CEK APAKAH USER INI ADALAH STAFF YANG DIUNDANG?
-                // Kita cari dokumen dengan ID = Email
-                val invitationSnapshot = db.collection("users").document(email).get().await()
+                // Cek apakah email ini ada di daftar undangan staff
+                val invitationSnapshot = FirestoreAuth.getInvitationByEmail(email)
 
-                if (invitationSnapshot.exists()) {
-                    // ==========================================
-                    // 🟢 KASUS A: STAFF / GURU (Sudah Diundang)
-                    // ==========================================
-                    Log.d("AuthRegister", "User ditemukan sebagai Staff Invite. Melakukan aktivasi.")
-                    registerAsStaff(email, pass, invitationSnapshot)
-
+                if (invitationSnapshot != null && invitationSnapshot.exists()) {
+                    // JALUR 1: AKTIVASI STAFF
+                    registerAsStaff(email, pass)
                 } else {
-                    // ==========================================
-                    // 🔵 KASUS B: ADMIN BARU (Sekolah Baru)
-                    // ==========================================
-                    Log.d("AuthRegister", "User baru. Mendaftar sebagai Admin.")
+                    // JALUR 2: PENDAFTARAN ADMIN BARU
+                    if (schoolNameInput.isBlank()) {
+                        _authState.value = AuthState.Error("Nama Sekolah wajib diisi untuk pendaftaran baru.")
+                        return@launch
+                    }
                     registerAsNewAdmin(email, pass, schoolNameInput)
                 }
-
             } catch (e: Exception) {
                 Log.e("AuthRegister", "Error Register", e)
                 _authState.value = AuthState.Error(e.message ?: "Gagal memproses pendaftaran.")
@@ -120,290 +98,216 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // --- LOGIKA REGISTER STAFF (MENGAKTIFKAN UNDANGAN) ---
-    private suspend fun registerAsStaff(email: String, pass: String, snapshot: DocumentSnapshot) {
+    private suspend fun registerAsStaff(email: String, pass: String) {
         try {
             _authState.value = AuthState.Loading("Mengaktifkan Akun Staff...")
-
-            // 1. Buat User di Firebase Authentication
             val authResult = auth.createUserWithEmailAndPassword(email, pass).await()
-            val uid = authResult.user?.uid ?: throw Exception("Gagal membuat UID Auth.")
+            val uid = authResult.user?.uid ?: throw Exception("Gagal membuat UID.")
 
-            // 2. Siapkan Data Update (Menyesuaikan struktur Admin)
-            val updates = hashMapOf<String, Any>(
-                "uid" to uid,                    // Isi UID dari Auth
-                "device_id" to currentDeviceId,  // Bind ke HP ini
-                "isRegistered" to true,          // Tandai sudah registrasi
-                "status" to "ACTIVE"             // Ubah dari PENDING ke ACTIVE
-                // Field lain (role, sekolahId, assigned_classes) BIARKAN TETAP (jangan ditimpa)
-            )
+            // Aktivasi di Firestore (Masih menggunakan ID Email sebagai identitas awal)
+            FirestoreAuth.activateStaffAccount(uid, email, currentDeviceId)
 
-            // 3. Update Dokumen Firestore (ID: Email)
-            db.collection("users").document(email).update(updates).await()
-
-            // 4. Auto Login & Listen
-            Log.d("AuthRegister", "Staff $email berhasil diaktivasi.")
-            startListeningToUserStatus(docId = email) // Listen ke dokumen Email
-
+            // Setelah sukses, arahkan ke identifyAndListen untuk proses MIGRASI ke UID
+            identifyAndListen(uid, email)
         } catch (e: Exception) {
-            // Jika email sudah terdaftar di Auth tapi data belum update
-            if (e.message?.contains("email address is already in use") == true) {
-                _authState.value = AuthState.Error("Email sudah terdaftar. Silakan Login.")
-            } else {
-                throw e
-            }
+            handleAuthError(e)
         }
     }
 
-    // --- LOGIKA REGISTER ADMIN BARU ---
     private suspend fun registerAsNewAdmin(email: String, pass: String, schoolNameInput: String) {
         try {
             _authState.value = AuthState.Loading("Mendaftarkan Sekolah Baru...")
-
-            // 1. Buat User Auth
             val authResult = auth.createUserWithEmailAndPassword(email, pass).await()
             val uid = authResult.user?.uid ?: throw Exception("UID Gagal")
 
-            val calendar = Calendar.getInstance()
-            calendar.add(Calendar.DAY_OF_YEAR, 30) // Trial 30 Hari
+            val calendar = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, 30) }
+            val sekolahId = "SCH-${System.currentTimeMillis().toString().takeLast(6)}"
 
-            // 2. Buat Data Admin Baru
-            val data = hashMapOf(
-                "uid" to uid,
-                "email" to email,
-                "role" to "ADMIN",
-                "school_name" to schoolNameInput, // Pakai nama sekolah dari input
-                "sekolahId" to "SCH-${System.currentTimeMillis().toString().takeLast(6)}",
-                "device_id" to currentDeviceId,
-                "status" to "PENDING", // Admin baru butuh approval Super Admin? Atau langsung ACTIVE?
-                "isRegistered" to true,
-                "assigned_classes" to listOf<String>(),
-                "expiry_date" to Timestamp(calendar.time),
-                "created_at" to System.currentTimeMillis()
+            // Buat akun admin (ID dokumen langsung menggunakan UID)
+            FirestoreAuth.createAdminAccount(
+                uid = uid,
+                email = email,
+                schoolName = schoolNameInput,
+                sekolahId = sekolahId,
+                deviceId = currentDeviceId,
+                expiryDate = Timestamp(calendar.time)
             )
 
-            // 3. Simpan dengan ID = UID (Standar Admin)
-            db.collection("users").document(uid).set(data).await()
-
-            // 4. Listen
-            startListeningToUserStatus(docId = uid)
-
+            identifyAndListen(uid, email)
         } catch (e: Exception) {
-            throw e
+            handleAuthError(e)
         }
     }
 
-    // ----------------------------------------------------
-    // 4. IDENTIFY DOCUMENT ID (CRITICAL FIX)
-    // ----------------------------------------------------
+    // ==========================================
+    // 🚀 CORE LOGIC: IDENTIFY & MIGRATE
+    // ==========================================
     
-    /**
-     * Mencari tahu apakah data user disimpan dengan ID = Email (Staff) 
-     * atau ID = UID (Admin), lalu memasang Listener.
-     */
     private fun identifyAndListen(uid: String, email: String?) {
         viewModelScope.launch {
             try {
-                // SKENARIO A: Cek apakah dokumen ada di users/{email} (Untuk Staff/Guru)
-                if (email != null) {
-                    val emailDoc = db.collection("users").document(email).get().await()
-                    if (emailDoc.exists()) {
-                        Log.d("AzuraAuth", "User ditemukan via Email ID: $email")
-                        startListeningToUserStatus(docId = email)
-                        return@launch
-                    }
-                }
+                val db = FirebaseFirestore.getInstance()
+                val userRef = db.collection("users")
 
-                // SKENARIO B: Cek apakah dokumen ada di users/{uid} (Untuk Admin)
-                val uidDoc = db.collection("users").document(uid).get().await()
+                // 1. PRIORITAS: Cek apakah dokumen UID sudah ada
+                val uidDoc = userRef.document(uid).get().await()
                 if (uidDoc.exists()) {
-                    Log.d("AzuraAuth", "User ditemukan via UID: $uid")
+                    Log.d("AzuraAuth", "✅ UID Document found.")
                     startListeningToUserStatus(docId = uid)
                     return@launch
                 }
 
-                // Jika tidak ditemukan di keduanya
-                Log.e("AzuraAuth", "Data user tidak ditemukan di database")
-                _authState.value = AuthState.Error("Akun terdaftar di Auth tapi data profil hilang.")
-                auth.signOut()
+                // 2. LEGACY CHECK: Jika UID tidak ada, cari berdasarkan ID Email (Aktivasi Staff)
+                if (email != null) {
+                    val normalizedEmail = email.lowercase().trim()
+                    val emailDoc = userRef.document(normalizedEmail).get().await()
+                    
+                    if (emailDoc.exists()) {
+                        _authState.value = AuthState.Loading("Menyiapkan akun...")
+                        
+                        // 🚀 MIGRASI: Ubah ID dokumen dari Email menjadi UID
+                        val newDocId = migrateUserDocument(normalizedEmail, uid)
+                        
+                        startListeningToUserStatus(docId = newDocId)
+                        return@launch
+                    }
+                }
 
+                _authState.value = AuthState.Error("Profil tidak ditemukan. Hubungi Admin.")
+                
             } catch (e: Exception) {
-                _authState.value = AuthState.Error("Gagal mengambil data profil: ${e.message}")
+                Log.e("AzuraAuth", "❌ identifyAndListen failed", e)
+                _authState.value = AuthState.Error("Gagal sinkronisasi profil.")
             }
         }
     }
 
-    // ----------------------------------------------------
-    // 5. REALTIME LISTENER
-    // ----------------------------------------------------
+    private suspend fun migrateUserDocument(oldDocId: String, newUid: String): String {
+        val db = FirebaseFirestore.getInstance()
+        val userRef = db.collection("users")
+        
+        return try {
+            val oldDoc = userRef.document(oldDocId).get().await()
+            if (oldDoc.exists()) {
+                val data = oldDoc.data?.toMutableMap() ?: mutableMapOf()
+                
+                data["uid"] = newUid
+                data["isRegistered"] = true
+                data["status"] = "ACTIVE"
+
+                // Tulis dokumen baru (ID = UID), Hapus dokumen lama (ID = Email)
+                userRef.document(newUid).set(data).await()
+                userRef.document(oldDocId).delete().await()
+                
+                Log.d("AzuraAuth", "✅ Migrasi Berhasil: $oldDocId -> $newUid")
+                newUid 
+            } else {
+                oldDocId
+            }
+        } catch (e: Exception) {
+            Log.e("AzuraAuth", "❌ Migrasi Gagal", e)
+            oldDocId 
+        }
+    }
+
+    // ==========================================
+    // 🎧 REALTIME LISTENER & SYNC
+    // ==========================================
 
     private fun startListeningToUserStatus(docId: String) {
-        // Hapus listener lama jika ada
         statusListener?.remove()
-
-        statusListener = db.collection("users")
-            .document(docId)
+        statusListener = FirebaseFirestore.getInstance()
+            .collection("users").document(docId)
             .addSnapshotListener { snapshot, e ->
-
                 if (e != null) {
-                    _authState.value = AuthState.Error("Koneksi cloud terputus.")
+                    _authState.value = AuthState.Error("Cloud disconnected.")
                     return@addSnapshotListener
                 }
-
                 if (snapshot != null && snapshot.exists()) {
-                    // Berikan UID asli dari Auth agar sinkronisasi Room tetap konsisten
-                    val authUid = auth.currentUser?.uid ?: docId
-                    processUserSnapshot(snapshot, authUid)
+                    processUserSnapshot(snapshot, auth.currentUser?.uid ?: docId)
                 } else {
                     _authState.value = AuthState.LoggedOut
                 }
             }
     }
 
-    // ----------------------------------------------------
-    // 6. SNAPSHOT PROCESS (LOGIC FIX)
-    // ----------------------------------------------------
-
     private fun processUserSnapshot(snapshot: DocumentSnapshot, uid: String) {
         try {
-            // Ambil data mentah
-            val status = snapshot.getString("status") // "Active", "PENDING", dll
-            val isRegistered = snapshot.getBoolean("isRegistered") ?: false
-            val cloudDeviceId = snapshot.getString("device_id")
+            val profile = snapshot.toObject(UserProfile::class.java) ?: return
+            val rawStatus = snapshot.getString("status")?.trim() ?: "PENDING"
 
-            // --- A. CEK SECURITY DEVICE LOCK ---
+            val cloudDeviceId = snapshot.getString("device_id")
             if (cloudDeviceId.isNullOrEmpty()) {
-                // Jika belum ada device_id, kunci ke HP ini
                 snapshot.reference.update("device_id", currentDeviceId)
             } else if (cloudDeviceId != currentDeviceId) {
-                // Jika login di HP lain
-                _authState.value = AuthState.Error("Akun sedang digunakan di perangkat lain.")
-                logout() // Auto logout
+                _authState.value = AuthState.Error("Akun aktif di perangkat lain.")
+                logout()
                 return
             }
 
-            // --- B. CEK STATUS AKTIF (FLEXIBLE LOGIC) ---
-            // Akun dianggap aktif jika:
-            // 1. Field 'status' mengandung kata "Active" atau "Approved" (Case insensitive)
-            // 2. ATAU field 'isRegistered' bernilai true (Legacy data teacher)
-            val isActiveStatus = status?.equals("Active", ignoreCase = true) == true || 
-                                 status?.equals("APPROVED", ignoreCase = true) == true ||
-                                 status?.equals("ACTIVE", ignoreCase = true) == true
-            
-            val isAccountActive = isActiveStatus || isRegistered
+            val isAccountActive = rawStatus.equals("ACTIVE", ignoreCase = true) || profile.isRegistered
 
             if (isAccountActive) {
-                // Hitung expiry (default 1 tahun jika null)
                 val expiry = snapshot.getTimestamp("expiry_date")?.toDate()?.time
                     ?: (System.currentTimeMillis() + 31536000000L)
-
-                // Lanjut sinkronisasi ke database lokal
-                syncUserToRoom(snapshot, uid, expiry)
+                syncUserToRoom(profile, uid, expiry)
             } else {
-                // Jika status Pending atau Rejected
-                val msg = if (status != null) "Status Akun: $status" else "Menunggu Verifikasi Admin."
-                _authState.value = AuthState.StatusWaiting(msg)
+                _authState.value = AuthState.StatusWaiting("Status: $rawStatus")
             }
-
         } catch (e: Exception) {
-            Log.e("AzuraAuth", "Error processing snapshot", e)
-            _authState.value = AuthState.Error("Format data akun tidak valid.")
+            _authState.value = AuthState.Error("Data profil corrupt.")
         }
     }
 
-    // ----------------------------------------------------
-    // 7. SYNC TO ROOM (LOCAL DB)
-    // ----------------------------------------------------
-
-    private fun syncUserToRoom(
-        snapshot: DocumentSnapshot,
-        uid: String,
-        expiryMillis: Long
-    ) {
-        // Batalkan proses sync sebelumnya jika ada
+    private fun syncUserToRoom(profile: UserProfile, uid: String, expiryMillis: Long) {
         syncJob?.cancel()
-
         syncJob = viewModelScope.launch(Dispatchers.IO) {
             try {
-                Log.d("AzuraAuth", "Mulai Sinkronisasi Room...")
-
-                // Ambil assigned_classes dengan aman (handle null atau format salah)
-                val rawClasses = snapshot.get("assigned_classes")
-                val safeClasses: List<String> = when (rawClasses) {
-                    is List<*> -> rawClasses.map { it.toString() }
-                    is String -> listOf(rawClasses) // Jaga-jaga jika admin salah input string tunggal
-                    else -> emptyList()
-                }
-
                 val userEntity = UserEntity(
                     uid = uid,
-                    sekolahId = snapshot.getString("sekolahId") ?: "SCH-UNKNOWN",
+                    sekolahId = profile.sekolahId,
                     deviceId = currentDeviceId,
-                    name = snapshot.getString("school_name") ?: "Azura User",
-                    email = snapshot.getString("email") ?: "",
-                    role = snapshot.getString("role") ?: "TEACHER",
-                    assignedClasses = safeClasses,
+                    name = if (profile.role == "ADMIN") profile.schoolName else profile.email.split("@")[0],
+                    email = profile.email,
+                    role = profile.role,
+                    assignedClasses = profile.assigned_classes, 
                     expiryMillis = expiryMillis,
                     lastSync = System.currentTimeMillis()
                 )
 
-                // Simpan ke Local DB
-                userDao.insertUser(userEntity)
-
-                Log.d("AzuraAuth", "Sync Sukses. Mengubah State ke Active.")
+                database.userDao().insertUser(userEntity)
 
                 withContext(Dispatchers.Main) {
                     _authState.value = AuthState.Active(
-                        uid = userEntity.uid,
-                        email = userEntity.email,
-                        role = userEntity.role,
-                        schoolName = userEntity.name,
-                        sekolahId = userEntity.sekolahId ?: "",
-                        expiryMillis = userEntity.expiryMillis,
-                        assignedClasses = userEntity.assignedClasses
+                        uid = uid,
+                        email = profile.email,
+                        role = profile.role,
+                        schoolName = profile.schoolName,
+                        sekolahId = profile.sekolahId,
+                        expiryMillis = expiryMillis,
+                        assignedClasses = profile.assigned_classes
                     )
                 }
-
             } catch (e: Exception) {
-                Log.e("AzuraAuth", "Gagal Sync Room", e)
-                withContext(Dispatchers.Main) {
-                    _authState.value = AuthState.Error("Gagal menyimpan data profil lokal.")
-                }
+                withContext(Dispatchers.Main) { _authState.value = AuthState.Error("Sync lokal gagal.") }
             }
         }
     }
-
-    // ----------------------------------------------------
-    // 8. LOGOUT & RESET
-    // ----------------------------------------------------
 
     fun logout() {
         syncJob?.cancel()
         statusListener?.remove()
         statusListener = null
-
         _authState.value = AuthState.LoggedOut
-
         viewModelScope.launch(Dispatchers.IO) {
-            try {
-                auth.signOut()
-                database.clearAllTables() // Hapus data lokal agar bersih
-                Log.d("AzuraAuth", "Logout berhasil & DB lokal dibersihkan.")
-            } catch (e: Exception) {
-                Log.e("AzuraAuth", "Logout Error", e)
-            }
+            auth.signOut()
+            database.clearAllTables()
         }
     }
 
-    fun sendPasswordReset(email: String) = viewModelScope.launch {
-        try {
-            auth.sendPasswordResetEmail(email).await()
-        } catch (e: Exception) {
-            Log.e("AzuraAuth", "Reset Pass Error", e)
-        }
-    }
-
-    fun resetError() {
-        _authState.value = AuthState.LoggedOut
+    private fun handleAuthError(e: Exception) {
+        val msg = if (e.message?.contains("already in use") == true) "Email sudah terdaftar." 
+                  else e.message ?: "Terjadi kesalahan."
+        _authState.value = AuthState.Error(msg)
     }
 }

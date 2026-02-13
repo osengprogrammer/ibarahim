@@ -10,8 +10,7 @@ import kotlinx.coroutines.tasks.await
 
 /**
  * 👥 FirestoreStudent (MANY-TO-MANY SUPPORTED)
- * Single source of truth for Student-related Firestore operations.
- * Diperbarui untuk mendukung sinkronisasi berbasis Array (Multiple Rombel).
+ * Source of truth untuk operasi data Siswa di Firestore.
  */
 object FirestoreStudent {
 
@@ -20,8 +19,7 @@ object FirestoreStudent {
 
     /**
      * 🔄 SMART SYNC STUDENTS
-     * Menggunakan 'whereArrayContainsAny' agar Guru/Dosen bisa menarik data 
-     * mahasiswa berdasarkan daftar mata kuliah yang mereka ampu (Many-to-Many).
+     * Menarik data dari Firestore dengan filter keamanan Many-to-Many.
      */
     suspend fun fetchSmartSyncStudents(
         sekolahId: String,
@@ -30,28 +28,42 @@ object FirestoreStudent {
         lastSync: Long
     ): List<FaceEntity> {
         return try {
-            // 1. Base Query: Sekolah ID
+            if (sekolahId.isBlank()) return emptyList()
+
+            // 1. Base Query: Harus sesuai Sekolah ID
             var query: Query = db.collection(FirestorePaths.STUDENTS)
                 .whereEqualTo(Constants.KEY_SEKOLAH_ID, sekolahId)
 
-            // 2. Filter Incremental (Time-based)
+            // 2. Filter Security Many-to-Many
+            // Jika bukan ADMIN, filter hanya rombel yang diampu (assignedClasses)
+            if (role != Constants.ROLE_ADMIN) {
+                if (assignedClasses.isNotEmpty()) {
+                    // Hanya tarik siswa yang Rombel-nya ada di daftar assignedClasses Guru
+                    query = query.whereArrayContainsAny(Constants.PILLAR_CLASS, assignedClasses)
+                } else {
+                    // 🚩 PERINGATAN: Jika Guru tidak punya kelas, jangan tarik data (Security)
+                    Log.w(TAG, "⚠️ Guru/User tidak memiliki assignedClasses. Sync dibatalkan.")
+                    return emptyList()
+                }
+            }
+            
+            // 3. Filter Incremental (Hanya ambil yang terbaru sejak sync terakhir)
             if (lastSync > 0) {
                 query = query.whereGreaterThan(Constants.KEY_TIMESTAMP, lastSync)
             }
 
-            // 3. Filter Security Many-to-Many
-            // Jika bukan Admin, tarik mahasiswa yang memiliki salah satu matkul yang diampu dosen
-            if (role != Constants.ROLE_ADMIN && assignedClasses.isNotEmpty()) {
-                // Firestore membatasi array-contains-any maksimal 10 item.
-                query = query.whereArrayContainsAny(Constants.PILLAR_CLASS, assignedClasses)
-            }
+            Log.d(TAG, "📡 Fetching students for school: $sekolahId with classes: $assignedClasses")
 
-            query.get().await().documents.mapNotNull { doc ->
+            val snapshot = query.get().await()
+            val list = snapshot.documents.mapNotNull { doc ->
                 mapStudentDocument(doc.data, sekolahId)
             }
+            
+            Log.d(TAG, "✅ Berhasil menarik ${list.size} siswa dari Cloud")
+            list
 
         } catch (e: Exception) {
-            Log.e(TAG, "❌ fetchSmartSyncStudents failed", e)
+            Log.e(TAG, "❌ fetchSmartSyncStudents failed: ${e.message}", e)
             emptyList()
         }
     }
@@ -64,7 +76,6 @@ object FirestoreStudent {
         className: String
     ): List<FaceEntity> {
         return try {
-            // Gunakan arrayContains karena di Firestore field className sekarang berbentuk Array
             db.collection(FirestorePaths.STUDENTS)
                 .whereEqualTo(Constants.KEY_SEKOLAH_ID, sekolahId)
                 .whereArrayContains(Constants.PILLAR_CLASS, className)
@@ -86,32 +97,32 @@ object FirestoreStudent {
 
     suspend fun uploadStudent(face: FaceEntity) {
         try {
-            // 🔥 LOGIKA KONVERSI CSV KE ARRAY 🔥
-            // Memecah "Math, English" dari Room menjadi ["Math", "English"] untuk Firestore
+            // Konversi String CSV (Room) ke Array (Firestore)
             val classList = face.className.split(",")
                 .map { it.trim() }
                 .filter { it.isNotEmpty() }
 
+            val data = mapOf(
+                Constants.FIELD_STUDENT_ID to face.studentId,
+                Constants.KEY_SEKOLAH_ID to face.sekolahId,
+                Constants.KEY_NAME to face.name,
+                Constants.FIELD_EMBEDDING to face.embedding.map { it.toDouble() },
+                Constants.KEY_TIMESTAMP to System.currentTimeMillis(),
+                Constants.FIELD_PHOTO_URL to face.photoUrl,
+                Constants.PILLAR_CLASS to classList, // Disimpan sebagai Array
+                Constants.FIELD_ROLE to face.role,
+                Constants.PILLAR_GRADE to face.grade,
+                Constants.PILLAR_SUB_GRADE to face.subGrade,
+                Constants.PILLAR_PROGRAM to face.program,
+                Constants.PILLAR_SUB_CLASS to face.subClass
+            )
+
             db.collection(FirestorePaths.STUDENTS)
                 .document(face.studentId)
-                .set(
-                    mapOf(
-                        Constants.FIELD_STUDENT_ID to face.studentId,
-                        Constants.KEY_SEKOLAH_ID to face.sekolahId,
-                        Constants.KEY_NAME to face.name,
-                        Constants.FIELD_EMBEDDING to face.embedding.map { it.toDouble() },
-                        Constants.KEY_TIMESTAMP to System.currentTimeMillis(),
-                        Constants.FIELD_PHOTO_URL to face.photoUrl,
-                        // SIMPAN SEBAGAI ARRAY (Penting untuk filter query)
-                        Constants.PILLAR_CLASS to classList, 
-                        Constants.FIELD_ROLE to face.role,
-                        Constants.PILLAR_GRADE to face.grade,
-                        Constants.PILLAR_SUB_GRADE to face.subGrade,
-                        Constants.PILLAR_PROGRAM to face.program,
-                        Constants.PILLAR_SUB_CLASS to face.subClass
-                    )
-                )
+                .set(data)
                 .await()
+                
+            Log.d(TAG, "✅ Student ${face.name} uploaded successfully")
         } catch (e: Exception) {
             Log.e(TAG, "❌ uploadStudent failed", e)
             throw e
@@ -138,9 +149,6 @@ object FirestoreStudent {
     // PRIVATE HELPERS
     // ==========================================
 
-    /**
-     * 🧬 Mapper Firestore → FaceEntity
-     */
     private fun mapStudentDocument(
         data: Map<String, Any>?,
         sekolahIdFallback: String
@@ -148,13 +156,13 @@ object FirestoreStudent {
         return try {
             if (data == null) return null
 
+            // Mapping embedding (Double dari Firestore -> FloatArray untuk AI)
             val embedding = (data[Constants.FIELD_EMBEDDING] as? List<*>)
                 ?.mapNotNull { (it as? Number)?.toFloat() }
                 ?.toFloatArray()
                 ?: return null
 
-            // 🔥 LOGIKA KONVERSI ARRAY KE CSV 🔥
-            // Mengubah kembali ["Math", "English"] dari Firestore menjadi "Math, English" untuk Room
+            // Konversi Array (Firestore) ke String CSV (Room)
             val rawClass = data[Constants.PILLAR_CLASS]
             val classNameString = when (rawClass) {
                 is List<*> -> rawClass.joinToString(", ")

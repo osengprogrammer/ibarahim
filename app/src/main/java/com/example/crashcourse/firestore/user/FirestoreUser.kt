@@ -10,16 +10,14 @@ import kotlinx.coroutines.tasks.await
 /**
  * 👤 FirestoreUser
  * Repository khusus untuk operasi Manajemen User/Staff.
- * Diperbarui: Menambahkan fungsi updateUserScope untuk menyimpan akses kelas.
  */
 object FirestoreUser {
 
     private const val TAG = "FirestoreUser"
-    // Pastikan FirestoreCore.db sudah terinisialisasi
     private val db = FirestoreCore.db 
 
     // ==========================================
-    // 1️⃣ FETCH USERS BY SCHOOL
+    // 1️⃣ FETCH USERS BY SCHOOL (Clean Version)
     // ==========================================
     suspend fun fetchUsersBySchool(sekolahId: String): List<UserProfile> {
         return try {
@@ -28,25 +26,9 @@ object FirestoreUser {
                 .get()
                 .await()
 
+            // 🔥 Menggunakan toObject: Jauh lebih simple & menangani mapping otomatis
             snapshot.documents.mapNotNull { doc ->
-                try {
-                    UserProfile(
-                        uid = doc.getString("uid") ?: doc.id, 
-                        email = doc.getString("email") ?: "No Email",
-                        role = doc.getString(Constants.FIELD_ROLE) ?: "TEACHER",
-                        schoolName = doc.getString("school_name") ?: "",
-                        sekolahId = doc.getString(Constants.KEY_SEKOLAH_ID) ?: "",
-                        isRegistered = doc.getBoolean("isRegistered") ?: false,
-                        assigned_classes = try {
-                            (doc.get("assigned_classes") as? List<*>)?.map { it.toString() } ?: emptyList()
-                        } catch (e: Exception) {
-                            emptyList()
-                        }
-                    )
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error parsing doc: ${doc.id}", e)
-                    null 
-                }
+                doc.toObject(UserProfile::class.java)?.copy(uid = doc.id)
             }
         } catch (e: Exception) {
             Log.e(TAG, "❌ fetchUsersBySchool failed", e)
@@ -55,7 +37,7 @@ object FirestoreUser {
     }
 
     // ==========================================
-    // 2️⃣ INVITE STAFF BY MAP (Untuk ViewModel)
+    // 2️⃣ INVITE STAFF BY MAP
     // ==========================================
     suspend fun inviteStaffByMap(email: String, data: HashMap<String, Any>) {
         try {
@@ -63,7 +45,6 @@ object FirestoreUser {
                 .document(email) 
                 .set(data, SetOptions.merge()) 
                 .await()
-            
             Log.d(TAG, "✅ Invite Map berhasil disimpan untuk: $email")
         } catch (e: Exception) {
             Log.e(TAG, "❌ inviteStaffByMap failed", e)
@@ -72,10 +53,11 @@ object FirestoreUser {
     }
 
     // ==========================================
-    // 3️⃣ INVITE STAFF (Legacy)
+    // 3️⃣ INVITE STAFF (Legacy Object Version)
     // ==========================================
     suspend fun inviteStaff(user: UserProfile) {
         try {
+            // Kita gunakan Map agar field names di Firestore tetap menggunakan underscore
             val data = hashMapOf(
                 "email" to user.email,
                 "role" to user.role,
@@ -83,7 +65,7 @@ object FirestoreUser {
                 "school_name" to user.schoolName,
                 "isRegistered" to false,
                 "status" to "PENDING",
-                "assigned_classes" to (user.assigned_classes ?: emptyList<String>()),
+                "assigned_classes" to user.assigned_classes,
                 "created_at" to System.currentTimeMillis()
             )
 
@@ -92,7 +74,7 @@ object FirestoreUser {
                 .set(data, SetOptions.merge())
                 .await()
             
-            Log.d(TAG, "✅ Undangan (Legacy) berhasil untuk: ${user.email}")
+            Log.d(TAG, "✅ Undangan berhasil untuk: ${user.email}")
         } catch (e: Exception) {
             Log.e(TAG, "❌ inviteStaff failed", e)
             throw e
@@ -100,15 +82,17 @@ object FirestoreUser {
     }
 
     // ==========================================
-    // 4️⃣ GET USER PROFILE
+    // 4️⃣ GET USER PROFILE (🔥 FIX UNTUK LOGIN 🔥)
     // ==========================================
-    suspend fun getUserProfile(uid: String): Map<String, Any?>? {
+    suspend fun getUserProfile(uid: String): UserProfile? {
         return try {
-            db.collection(FirestorePaths.USERS)
+            val doc = db.collection(FirestorePaths.USERS)
                 .document(uid)
                 .get()
                 .await()
-                .data
+            
+            // Jika data ada, langsung diconvert ke Object UserProfile
+            doc.toObject(UserProfile::class.java)?.copy(uid = doc.id)
         } catch (e: Exception) {
             Log.e(TAG, "❌ getUserProfile failed", e)
             null
@@ -130,14 +114,13 @@ object FirestoreUser {
     }
 
     // ==========================================
-    // 6️⃣ UPDATE USER SCOPE (🔥 INI YANG BARU 🔥)
+    // 6️⃣ UPDATE USER SCOPE
     // ==========================================
     suspend fun updateUserScope(docId: String, classes: List<String>) {
         try {
+            // Pastikan key "assigned_classes" sesuai dengan yang ada di Firestore
             val data = mapOf("assigned_classes" to classes)
             
-            // Menggunakan set + merge lebih aman daripada update
-            // agar tidak crash jika field assigned_classes belum ada sebelumnya
             db.collection(FirestorePaths.USERS)
                 .document(docId)
                 .set(data, SetOptions.merge()) 

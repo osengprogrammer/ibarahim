@@ -9,26 +9,16 @@ import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import androidx.lifecycle.viewmodel.compose.viewModel 
 
-// 🚀 CORE SCREENS
-import com.example.crashcourse.ui.MainScreen
-import com.example.crashcourse.ui.AdminDashboardScreen
-import com.example.crashcourse.ui.ProfileScreen
-import com.example.crashcourse.ui.auth.LoginScreen
-import com.example.crashcourse.ui.auth.RegisterScreen
-import com.example.crashcourse.ui.auth.StatusWaitingScreen
-import com.example.crashcourse.ui.add.AddUserScreen
-import com.example.crashcourse.ui.add.RegistrationMenuScreen
-import com.example.crashcourse.ui.add.SingleUploadScreen
-import com.example.crashcourse.ui.add.BulkRegistrationScreen
-import com.example.crashcourse.ui.edit.EditUserScreen
-import com.example.crashcourse.ui.checkin.CheckInScreen
-import com.example.crashcourse.ui.checkin.CheckInRecordScreen
-import com.example.crashcourse.ui.options.OptionsManagementScreen
-import com.example.crashcourse.ui.options.MasterClassManagementScreen
-import com.example.crashcourse.ui.monitor.LiveMonitorScreen 
-import com.example.crashcourse.ui.management.UserManagementScreen
-import com.example.crashcourse.ui.face.FaceListScreen
-import com.example.crashcourse.ui.EditUserScopeScreen 
+// 🚀 CORE SCREENS & COMPONENTS
+import com.example.crashcourse.ui.*
+import com.example.crashcourse.ui.auth.*
+import com.example.crashcourse.ui.add.*
+import com.example.crashcourse.ui.edit.*
+import com.example.crashcourse.ui.checkin.*
+import com.example.crashcourse.ui.options.*
+import com.example.crashcourse.ui.monitor.*
+import com.example.crashcourse.ui.management.*
+import com.example.crashcourse.ui.face.*
 import com.example.crashcourse.LoadingScreen 
 
 // 🚀 VIEWMODELS & STATES
@@ -43,24 +33,35 @@ fun NavGraph(
     viewModel: AuthViewModel, 
     onLogoutRequest: () -> Unit
 ) {
-    // 🎯 1. GLOBAL SECURITY OBSERVER
+    // 🎯 1. CENTRALIZED NAVIGATION OBSERVER
+    // Mengatur aliran navigasi global agar tidak terjadi loop/refresh terus-menerus
     LaunchedEffect(authState) {
         when (authState) {
+            is AuthState.Active -> {
+                // Hanya pindah ke Main jika saat ini masih di layar Login/Register
+                val currentRoute = navController.currentBackStackEntry?.destination?.route
+                if (currentRoute == Screen.Login.route || currentRoute == Screen.Register.route) {
+                    navController.navigate(Screen.Main.route) {
+                        popUpTo(0) { inclusive = true }
+                    }
+                }
+            }
             is AuthState.LoggedOut -> {
                 navController.navigate(Screen.Login.route) {
                     popUpTo(0) { inclusive = true }
                 }
             }
             is AuthState.StatusWaiting -> {
-                navController.navigate(Screen.StatusWaiting.route) {
-                    popUpTo(0)
+                // Hanya pindah jika belum di layar Waiting
+                if (navController.currentBackStackEntry?.destination?.route != Screen.StatusWaiting.route) {
+                    navController.navigate(Screen.StatusWaiting.route) {
+                        popUpTo(Screen.Login.route) { inclusive = true }
+                    }
                 }
             }
             else -> {} 
         }
     }
-
-    
 
     // 🎯 2. SETUP NAVHOST
     NavHost(
@@ -73,33 +74,14 @@ fun NavGraph(
         // ==========================================
         
         composable(Screen.Login.route) {
-            LaunchedEffect(authState) {
-                if (authState is AuthState.Active) {
-                    navController.navigate(Screen.Main.route) {
-                        popUpTo(Screen.Login.route) { inclusive = true }
-                    }
-                }
-            }
-
-            if (authState is AuthState.Active) {
-                LoadingScreen("Mengalihkan ke Dashboard...")
-            } else {
-                LoginScreen(
-                    onNavigateToRegister = { navController.navigate(Screen.Register.route) },
-                    viewModel = viewModel
-                )
-            }
+            // ✅ FIX: Hapus LaunchedEffect internal agar tidak berantem dengan Global Observer
+            LoginScreen(
+                onNavigateToRegister = { navController.navigate(Screen.Register.route) },
+                viewModel = viewModel
+            )
         }
         
         composable(Screen.Register.route) {
-            LaunchedEffect(authState) {
-                if (authState is AuthState.Active) {
-                    navController.navigate(Screen.Main.route) {
-                        popUpTo(Screen.Register.route) { inclusive = true }
-                    }
-                }
-            }
-
             RegisterScreen(
                 onNavigateToLogin = { navController.navigate(Screen.Login.route) },
                 viewModel = viewModel 
@@ -111,7 +93,7 @@ fun NavGraph(
         }
 
         // ==========================================
-        // 🏠 ACTIVE ROUTES
+        // 🏠 ACTIVE ROUTES (ADMIN & STAFF)
         // ==========================================
         
         composable(Screen.Main.route) {
@@ -119,19 +101,20 @@ fun NavGraph(
                 is AuthState.Active -> {
                     MainScreen(
                         authState = authState,
-                        // ✅ MODIFIKASI: Sekarang navigasi CheckIn butuh konteks sesi
-                        onNavigateToCheckIn = { 
-                            // Jika di Main sudah ada pilihan kelas, kirim namanya
-                            // Untuk sementara default "General" atau rute dinamis
-                            navController.navigate("checkin_screen/General Session") 
+                        onNavigateToCheckIn = { sessionName -> 
+                            navController.navigate("checkin_screen/$sessionName") 
                         },
-                        onNavigateToAdmin = { navController.navigate(Screen.Admin.route) },
+                        onNavigateToAdmin = { 
+                            // Proteksi tambahan: hanya navigasi jika role ADMIN
+                            if (authState.role == "ADMIN") {
+                                navController.navigate(Screen.Admin.route) 
+                            }
+                        },
                         onLogoutRequest = onLogoutRequest
                     )
                 }
                 is AuthState.Loading -> LoadingScreen(authState.message)
-                is AuthState.Checking -> LoadingScreen("Memverifikasi data...")
-                else -> LoadingScreen("Sinkronisasi Cloud...")
+                else -> LoadingScreen("Mempersiapkan data sesi...")
             }
         }
 
@@ -141,7 +124,6 @@ fun NavGraph(
             } else { LoadingScreen() }
         }
 
-        // ✅ FIX: CHECK-IN DENGAN ARGUMENT (MANY-TO-MANY)
         composable(
             route = "checkin_screen/{sessionName}",
             arguments = listOf(navArgument("sessionName") { type = NavType.StringType })
@@ -149,10 +131,14 @@ fun NavGraph(
             val sessionName = backStackEntry.arguments?.getString("sessionName") ?: "General"
             CheckInScreen(
                 useBackCamera = true,
-                activeSession = sessionName // 🚀 Kirim ke Screen
+                activeSession = sessionName
             )
         }
         
+        // ==========================================
+        // ⚙️ MANAGEMENT ROUTES (DIBATASI JIKA PERLU)
+        // ==========================================
+
         composable(Screen.Admin.route) { 
             if (authState is AuthState.Active) AdminDashboardScreen(navController, authState) else LoadingScreen() 
         }

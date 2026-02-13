@@ -5,107 +5,91 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.crashcourse.db.*
-import com.example.crashcourse.firestore.FirestoreAttendance
-import com.example.crashcourse.firestore.student.FirestoreStudent
-import com.example.crashcourse.utils.Constants
+import com.example.crashcourse.repository.FaceRepository
+import com.example.crashcourse.repository.UserRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.time.LocalDateTime
 
 /**
- * 👤 FaceViewModel (V.3 - Many-to-Many Ready)
- * Mengelola pendaftaran biometrik dan proses check-in berbasis sesi mata kuliah.
+ * 👤 FaceViewModel (V.7.0 - Data Logistics Specialist)
+ * Khusus mengelola Pendaftaran Biometrik, Filter Data, dan Sinkronisasi Cloud.
+ * Urusan Recognition & Absensi telah dipindah ke RecognitionViewModel.
  */
 class FaceViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val db = AppDatabase.getInstance(application)
-    private val faceDao = db.faceDao()
-    private val userDao = db.userDao()
-    private val checkInDao = db.checkInRecordDao()
+    private val userRepo = UserRepository(application)
+    private val faceRepo = FaceRepository(application)
 
     companion object {
         private const val TAG = "FaceViewModel"
-        private const val CHECK_IN_COOLDOWN_SEC = 30L
     }
+
+    // ==========================================
+    // 🔍 FILTER STATES (Internal)
+    // ==========================================
+    private val _searchQuery = MutableStateFlow("")
+    val searchQuery = _searchQuery.asStateFlow()
+
+    private val _selectedUnit = MutableStateFlow<MasterClassWithNames?>(null)
+    val selectedUnit = _selectedUnit.asStateFlow()
 
     // ==========================================
     // 🔐 SESSION CONTEXT
     // ==========================================
-    private val sekolahIdFlow = userDao
+    private val sekolahIdFlow = userRepo
         .getCurrentUserFlow()
         .map { it?.sekolahId }
         .distinctUntilChanged()
 
     // ==========================================
-    // 🛡️ SCOPED FACE LIST
+    // 🛡️ REAKTIF: SCOPED & FILTERED FACE LIST
     // ==========================================
-    val faceList: StateFlow<List<FaceEntity>> =
-        combine(sekolahIdFlow, faceDao.getAllFacesFlow()) { sid, faces ->
-            if (sid.isNullOrBlank()) emptyList()
-            else faces.filter { it.sekolahId == sid }
-        }.stateIn(
-            viewModelScope,
-            SharingStarted.WhileSubscribed(5_000),
+    // Menyediakan daftar siswa yang sudah difilter untuk kebutuhan UI Management
+    val filteredFaces: StateFlow<List<FaceEntity>> = combine(
+        sekolahIdFlow,
+        faceRepo.getAllFacesFlow(),
+        _searchQuery,
+        _selectedUnit
+    ) { sid, faces, query, unit ->
+        if (sid.isNullOrBlank()) {
             emptyList()
-        )
-
-    // ==========================================
-    // 1️⃣ CHECK-IN (DENGAN KONTEKS SESI MATKUL)
-    // ==========================================
-    /**
-     * Menyimpan data kehadiran berdasarkan hasil deteksi AI dan Sesi yang dipilih Dosen.
-     * @param name Nama hasil deteksi AI Scanner.
-     * @param activeSession Nama mata kuliah yang dipilih di UI (KRS/Sesi Aktif).
-     */
-    fun saveCheckInWithSession(name: String, activeSession: String) {
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val user = userDao.getCurrentUser() ?: return@launch
-                val sekolahId = user.sekolahId ?: return@launch
-
-                // Cari data biometrik lokal
-                val allFaces = faceDao.getFaceByName(name)
-                val face = allFaces.firstOrNull { it.sekolahId == sekolahId }
-                    ?: return@launch
-
-                // ⏱️ Anti-Spam Berdasarkan Sesi
-                // Menggunakan fungsi getLastRecordForClass di DAO agar cooldown terikat pada matkul tertentu
-                val lastRecord = checkInDao.getLastRecordForClass(face.studentId, activeSession)
-                if (lastRecord != null && lastRecord.timestamp.isAfter(LocalDateTime.now().minusSeconds(CHECK_IN_COOLDOWN_SEC))) {
-                    Log.d(TAG, "⏳ Cooldown active for ${face.name} in session $activeSession")
-                    return@launch
-                }
-
-                val record = CheckInRecord(
-                    id = 0,
-                    studentId = face.studentId,
-                    name = face.name,
-                    timestamp = LocalDateTime.now(),
-                    status = Constants.STATUS_PRESENT,
-                    verified = true,
-                    syncStatus = "PENDING",
-                    photoPath = "",
-                    className = activeSession, // Menyimpan sesi spesifik, bukan CSV
-                    gradeName = face.grade,
-                    role = face.role
-                )
-
-                // Simpan ke Lokal
-                val rowId = checkInDao.insert(record)
+        } else {
+            faces.filter { face ->
+                val isMySchool = face.sekolahId == sid
+                val matchUnit = unit == null || face.className.contains(unit.className, ignoreCase = true)
+                val matchSearch = query.isEmpty() || 
+                                 face.name.contains(query, ignoreCase = true) || 
+                                 face.studentId.contains(query)
                 
-                // 🔥 Kirim ke Cloud (Firestore)
-                FirestoreAttendance.saveCheckIn(record.copy(id = rowId.toInt()), sekolahId)
-
-            } catch (e: Exception) {
-                Log.e(TAG, "❌ saveCheckInWithSession failed", e)
+                isMySchool && matchUnit && matchSearch
             }
         }
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5_000),
+        initialValue = emptyList()
+    )
+
+    // ==========================================
+    // 🎮 FILTER ACTIONS
+    // ==========================================
+    fun updateSearchQuery(query: String) {
+        _searchQuery.value = query
+    }
+
+    fun updateSelectedUnit(unit: MasterClassWithNames?) {
+        _selectedUnit.value = unit
+    }
+
+    fun resetFilters() {
+        _searchQuery.value = ""
+        _selectedUnit.value = null
     }
 
     // ==========================================
-    // 2️⃣ REGISTER FACE + MULTI ROMBEL
+    // 1️⃣ REGISTER ACTIONS
     // ==========================================
     fun registerFaceWithMultiUnit(
         studentId: String,
@@ -116,38 +100,27 @@ class FaceViewModel(application: Application) : AndroidViewModel(application) {
         onSuccess: () -> Unit,
         onDuplicate: (String) -> Unit = {}
     ) {
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch {
             try {
-                val user = userDao.getCurrentUser() ?: return@launch
+                val user = userRepo.getCurrentUser() ?: return@launch
                 val sekolahId = user.sekolahId ?: return@launch
 
-                if (faceDao.getFaceByStudentId(studentId) != null) {
+                if (faceRepo.getFaceByStudentId(studentId) != null) {
                     withContext(Dispatchers.Main) { onDuplicate(studentId) }
                     return@launch
                 }
 
-                val combinedClassName = units.joinToString(", ") { it.className }
-                val primaryUnit = units.firstOrNull() 
-
-                val face = FaceEntity(
+                faceRepo.registerFace(
                     studentId = studentId,
                     sekolahId = sekolahId,
                     name = name,
-                    photoUrl = photoUrl,
                     embedding = embedding,
-                    className = combinedClassName,
-                    grade = primaryUnit?.gradeName ?: "",
-                    role = primaryUnit?.roleName ?: Constants.ROLE_USER,
-                    program = primaryUnit?.programName ?: "",
-                    subClass = primaryUnit?.subClassName ?: "",
-                    subGrade = primaryUnit?.subGradeName ?: "",
-                    timestamp = System.currentTimeMillis()
+                    units = units,
+                    photoUrl = photoUrl
                 )
 
-                faceDao.insert(face)
-                FirestoreStudent.uploadStudent(face)
+                // Refresh RAM cache agar data baru siap digunakan RecognitionViewModel
                 FaceCache.refresh(getApplication())
-
                 withContext(Dispatchers.Main) { onSuccess() }
 
             } catch (e: Exception) {
@@ -157,7 +130,7 @@ class FaceViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // ==========================================
-    // 3️⃣ UPDATE FACE + MULTI ROMBEL
+    // 2️⃣ UPDATE ACTIONS
     // ==========================================
     fun updateFaceWithMultiUnit(
         originalFace: FaceEntity,
@@ -167,28 +140,18 @@ class FaceViewModel(application: Application) : AndroidViewModel(application) {
         newEmbedding: FloatArray?,
         onSuccess: () -> Unit
     ) {
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch {
             try {
-                val combinedClassName = newUnits.joinToString(", ") { it.className }
-                val primaryUnit = newUnits.firstOrNull()
-
-                val updatedFace = originalFace.copy(
+                faceRepo.registerFace(
+                    studentId = originalFace.studentId,
+                    sekolahId = originalFace.sekolahId,
                     name = newName,
-                    className = if (newUnits.isNotEmpty()) combinedClassName else originalFace.className,
-                    grade = primaryUnit?.gradeName ?: originalFace.grade,
-                    role = primaryUnit?.roleName ?: originalFace.role,
-                    program = primaryUnit?.programName ?: originalFace.program,
-                    subClass = primaryUnit?.subClassName ?: originalFace.subClass,
-                    subGrade = primaryUnit?.subGradeName ?: originalFace.subGrade,
-                    photoUrl = newPhotoPath ?: originalFace.photoUrl,
                     embedding = newEmbedding ?: originalFace.embedding,
-                    timestamp = System.currentTimeMillis()
+                    units = newUnits,
+                    photoUrl = newPhotoPath ?: originalFace.photoUrl
                 )
 
-                faceDao.insert(updatedFace)
-                FirestoreStudent.updateFaceWithPhoto(updatedFace)
                 FaceCache.refresh(getApplication())
-
                 withContext(Dispatchers.Main) { onSuccess() }
 
             } catch (e: Exception) {
@@ -198,38 +161,27 @@ class FaceViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     // ==========================================
-    // 4️⃣ SYNC & DELETE
+    // 3️⃣ MAINTENANCE ACTIONS (Sync & Delete)
     // ==========================================
     fun syncStudentsFromCloud() {
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch {
             try {
-                val user = userDao.getCurrentUser() ?: return@launch
-                val sekolahId = user.sekolahId ?: return@launch
-                val lastSync = faceDao.getLastSyncTimestamp() ?: 0L
-
-                val students = FirestoreStudent.fetchSmartSyncStudents(
-                    sekolahId = sekolahId,
-                    assignedClasses = user.assignedClasses,
-                    role = user.role,
-                    lastSync = lastSync
-                )
-
-                if (students.isNotEmpty()) {
-                    faceDao.insertAll(students)
-                    FaceCache.refresh(getApplication())
-                }
+                val user = userRepo.getCurrentUser() ?: return@launch
+                faceRepo.syncStudents(user)
+                FaceCache.refresh(getApplication())
+                Log.d(TAG, "✅ Sync Berhasil")
             } catch (e: Exception) {
-                Log.e(TAG, "❌ sync failed", e)
+                Log.e(TAG, "❌ Sinkronisasi gagal", e)
             }
         }
     }
 
     fun deleteFace(face: FaceEntity) {
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch {
             try {
-                FirestoreStudent.deleteStudent(face.studentId)
-                faceDao.delete(face)
+                faceRepo.deleteFace(face.studentId, face)
                 FaceCache.refresh(getApplication())
+                Log.d(TAG, "✅ Delete Berhasil")
             } catch (e: Exception) {
                 Log.e(TAG, "❌ delete failed", e)
             }

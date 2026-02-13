@@ -21,8 +21,9 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.crashcourse.firestore.user.UserProfile
 import com.example.crashcourse.ui.theme.AzuraPrimary
 import com.example.crashcourse.viewmodel.AuthState
-import com.example.crashcourse.viewmodel.UserListState
 import com.example.crashcourse.viewmodel.UserManagementViewModel
+// 🔥 IMPORT YANG BENAR (Dari package yang sama atau file State baru)
+import com.example.crashcourse.ui.management.UserListState 
 
 /**
  * 👥 Staff & Account Management Screen
@@ -36,6 +37,7 @@ fun UserManagementScreen(
     onEditScope: (String) -> Unit, // Mengirim UID atau Email ke EditUserScopeScreen
     userVM: UserManagementViewModel = viewModel()
 ) {
+    // Gunakan 'by' dan pastikan import getValue ada (sudah ditangani oleh Compose runtime)
     val uiState by userVM.uiState.collectAsStateWithLifecycle()
     var showInviteDialog by remember { mutableStateOf(false) }
 
@@ -54,7 +56,6 @@ fun UserManagementScreen(
                     }
                 },
                 actions = {
-                    // Tombol Refresh Manual
                     IconButton(onClick = { userVM.fetchUsers() }) {
                         Icon(Icons.Default.Refresh, "Refresh")
                     }
@@ -72,6 +73,7 @@ fun UserManagementScreen(
         }
     ) { padding ->
         Box(modifier = Modifier.padding(padding).fillMaxSize().background(Color(0xFFF8F9FA))) {
+            // Casting state ke UserListState agar property 'users' dan 'message' terbaca
             when (val state = uiState) {
                 is UserListState.Loading -> {
                     CircularProgressIndicator(Modifier.align(Alignment.Center))
@@ -86,7 +88,6 @@ fun UserManagementScreen(
                             StaffAccountItem(
                                 user = user,
                                 onEditAccess = {
-                                    // 🚀 LOGIC: Jika UID kosong (belum registrasi), gunakan Email sebagai ID
                                     val identifier = if (user.uid.isNotEmpty()) user.uid else user.email
                                     onEditScope(identifier)
                                 }
@@ -112,7 +113,6 @@ fun UserManagementScreen(
         }
     }
 
-    // --- DIALOG UNDANG STAFF ---
     if (showInviteDialog) {
         InviteStaffDialog(
             onDismiss = { showInviteDialog = false },
@@ -145,7 +145,6 @@ fun StaffAccountItem(user: UserProfile, onEditAccess: () -> Unit) {
                 Spacer(Modifier.height(4.dp))
                 
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    // Badge Role
                     Surface(
                         color = if (user.role == "ADMIN") Color(0xFFE3F2FD) else Color(0xFFF1F8E9),
                         shape = RoundedCornerShape(4.dp)
@@ -161,7 +160,6 @@ fun StaffAccountItem(user: UserProfile, onEditAccess: () -> Unit) {
                     
                     Spacer(Modifier.width(8.dp))
                     
-                    // Indikator Status Registrasi
                     val statusText = if (user.isRegistered) "Aktif" else "Menunggu Registrasi"
                     val statusColor = if (user.isRegistered) Color(0xFF4CAF50) else Color(0xFFFF9800)
                     
@@ -183,7 +181,6 @@ fun StaffAccountItem(user: UserProfile, onEditAccess: () -> Unit) {
                 }
             }
 
-            // Tombol Atur Scope (Kunci)
             Surface(
                 onClick = onEditAccess,
                 color = AzuraPrimary.copy(alpha = 0.1f),

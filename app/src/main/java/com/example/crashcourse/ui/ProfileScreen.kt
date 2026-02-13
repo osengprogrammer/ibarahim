@@ -5,7 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape // 🚀 FIX: Import ini wajib ada
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -14,7 +14,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip // 🚀 FIX: Import ini wajib ada
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -23,14 +23,16 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.crashcourse.ui.SyncState // 🔥 FIX: Import dari package UI yang baru
 import com.example.crashcourse.viewmodel.AuthState
-import com.example.crashcourse.viewmodel.SyncState
 import com.example.crashcourse.viewmodel.SyncViewModel
 import java.text.SimpleDateFormat
 import java.util.*
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 
 /**
- * 👤 ProfileScreen
+ * 👤 ProfileScreen (V.5.2 - Refactored Sync)
  * Menampilkan informasi akun dan sinkronisasi data cloud.
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -42,6 +44,7 @@ fun ProfileScreen(
     syncViewModel: SyncViewModel = viewModel()
 ) {
     val context = LocalContext.current
+    // Menggunakan 'by' agar otomatis mendapatkan value dari StateFlow
     val syncState by syncViewModel.syncState.collectAsStateWithLifecycle()
     val isAdmin = authState.role == "ADMIN"
 
@@ -158,10 +161,12 @@ fun ProfileScreen(
                     
                     Spacer(modifier = Modifier.height(16.dp))
                     
-                    if (syncState is SyncState.Loading) {
+                    // Smart Casting dengan pengecekan state
+                    val currentSyncState = syncState 
+                    if (currentSyncState is SyncState.Loading) {
                         LinearProgressIndicator(modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(4.dp)))
                         Text(
-                            text = (syncState as SyncState.Loading).message,
+                            text = currentSyncState.message, // Aman karena smart cast
                             fontSize = 12.sp,
                             modifier = Modifier.padding(top = 8.dp),
                             color = MaterialTheme.colorScheme.primary
