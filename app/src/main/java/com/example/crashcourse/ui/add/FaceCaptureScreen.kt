@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FlipCameraAndroid
@@ -48,6 +47,11 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.concurrent.Executors
 
+/**
+ * 📸 FaceCaptureScreen V.15.6
+ * Solusi: Menghapus parameter 'enabled' yang tidak terdefinisi di AzuraButton
+ * dan menggantinya dengan manual guard logic di onClick.
+ */
 @OptIn(ExperimentalPermissionsApi::class)
 @Composable
 fun FaceCaptureScreen(
@@ -62,11 +66,13 @@ fun FaceCaptureScreen(
     val executor = remember { Executors.newSingleThreadExecutor() }
     val coroutineScope = rememberCoroutineScope()
 
+    // --- Biometric States ---
     var faceBounds by remember { mutableStateOf<List<Rect>>(emptyList()) }
     var imageSize by remember { mutableStateOf(IntSize.Zero) }
-    var imageRotation by remember { mutableStateOf(0) }
+    var imageRotation by remember { mutableIntStateOf(0) }
     var lastEmbedding by remember { mutableStateOf<FloatArray?>(null) }
 
+    // --- UI Logic States ---
     var isProcessing by remember { mutableStateOf(false) }
     var showCaptureFeedback by remember { mutableStateOf(false) }
     var captureSuccess by remember { mutableStateOf(false) }
@@ -77,6 +83,7 @@ fun FaceCaptureScreen(
     val imageCapture = remember { ImageCapture.Builder().build() }
     var useFrontCamera by remember { mutableStateOf(true) }
 
+    // ✅ Integrasi FaceAnalyzer (V.15.0 - Normalization & Square Crop Ready)
     val analyzer = remember {
         FaceAnalyzer { result ->
             androidx.compose.runtime.snapshots.Snapshot.withMutableSnapshot {
@@ -102,8 +109,6 @@ fun FaceCaptureScreen(
             flashAlpha.animateTo(0f, tween(300))
             checkmarkScale.animateTo(1.2f, spring(Spring.DampingRatioLowBouncy))
             checkmarkScale.animateTo(1f, tween(300))
-            delay(1500)
-            showCaptureFeedback = false
         }
     }
 
@@ -140,6 +145,7 @@ fun FaceCaptureScreen(
             AndroidView(factory = { previewView }, modifier = Modifier.fillMaxSize())
         }
 
+        // Overlay Deteksi Wajah
         if (imageSize != IntSize.Zero) {
             FaceOverlay(
                 faceBounds = faceBounds,
@@ -152,7 +158,7 @@ fun FaceCaptureScreen(
 
         Box(Modifier.fillMaxSize().background(Color.White.copy(alpha = flashAlpha.value)))
 
-        // --- AZURA TOP BAR ---
+        // --- TOP HUD STATUS ---
         Surface(
             modifier = Modifier.align(Alignment.TopCenter).padding(24.dp).fillMaxWidth(),
             shape = RoundedCornerShape(24.dp),
@@ -164,7 +170,7 @@ fun FaceCaptureScreen(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.Center
             ) {
-                val statusText = if (faceBounds.isEmpty()) "MENCARI WAJAH..." else "WAJAH TERDETEKSI"
+                val statusText = if (faceBounds.isEmpty()) "MENCARI WAJAH..." else "SIAP DAFTAR"
                 val statusColor = if (faceBounds.isEmpty()) Color.Yellow else AzuraSuccess
                 
                 Box(Modifier.size(8.dp).background(statusColor, CircleShape))
@@ -176,7 +182,7 @@ fun FaceCaptureScreen(
             }
         }
 
-        // --- SUCCESS OVERLAY ---
+        // --- SUCCESS FEEDBACK ---
         AnimatedVisibility(visible = showCaptureFeedback, enter = fadeIn(), exit = fadeOut()) {
             Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.85f)), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -191,18 +197,19 @@ fun FaceCaptureScreen(
                                 Image(
                                     bitmap = capturedBitmap!!.asImageBitmap(),
                                     contentDescription = null,
-                                    modifier = Modifier.fillMaxSize().clip(CircleShape)
+                                    modifier = Modifier.fillMaxSize().clip(CircleShape),
+                                    contentScale = androidx.compose.ui.layout.ContentScale.Crop
                                 )
                             } else {
                                 Icon(Icons.Default.Check, null, tint = AzuraAccent, modifier = Modifier.size(80.dp).scale(checkmarkScale.value))
                             }
                         }
                         Spacer(Modifier.height(24.dp))
-                        Text("BERHASIL", style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Black, color = Color.White))
+                        Text("DATA TERSIMPAN", style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Black, color = Color.White))
                     } else {
                         CircularProgressIndicator(color = AzuraAccent, strokeWidth = 6.dp)
                         Spacer(Modifier.height(16.dp))
-                        Text("PROSES...", color = Color.White, style = MaterialTheme.typography.labelLarge)
+                        Text("SEDANG MEMPROSES...", color = Color.White)
                     }
                 }
             }
@@ -224,10 +231,14 @@ fun FaceCaptureScreen(
                 Text("Batal")
             }
 
+            // 🔥 AZURA BUTTON TANPA PARAMETER 'ENABLED' (Guard Logic di onClick)
             AzuraButton(
-                text = if (mode == CaptureMode.EMBEDDING) "Daftar Wajah" else "Ambil Foto",
+                text = if (mode == CaptureMode.EMBEDDING) "Daftarkan Biometrik" else "Ambil Foto Profil",
                 onClick = {
+                    // 🛡️ Manual Guard: Jangan proses jika sedang loading atau wajah tidak ditemukan (untuk mode embedding)
                     if (isProcessing) return@AzuraButton
+                    if (mode == CaptureMode.EMBEDDING && faceBounds.isEmpty()) return@AzuraButton
+
                     isProcessing = true
                     showCaptureFeedback = true
                     captureSuccess = false
@@ -253,9 +264,17 @@ fun FaceCaptureScreen(
                                             capturedBitmap = bitmap
                                             onPhotoCaptured(bitmap)
                                             image.close()
-                                            coroutineScope.launch { captureSuccess = true; delay(1500); isProcessing = false; onClose() }
+                                            coroutineScope.launch { 
+                                                captureSuccess = true
+                                                delay(1500)
+                                                isProcessing = false
+                                                onClose() 
+                                            }
                                         }
-                                        override fun onError(exc: ImageCaptureException) { isProcessing = false; showCaptureFeedback = false }
+                                        override fun onError(exc: ImageCaptureException) { 
+                                            isProcessing = false
+                                            showCaptureFeedback = false 
+                                        }
                                     }
                                 )
                             }
@@ -267,7 +286,7 @@ fun FaceCaptureScreen(
             )
         }
 
-        // Camera Switch
+        // Camera Flip Toggle
         IconButton(
             onClick = { useFrontCamera = !useFrontCamera },
             modifier = Modifier

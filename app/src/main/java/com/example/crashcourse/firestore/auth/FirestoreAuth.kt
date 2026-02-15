@@ -11,7 +11,7 @@ import com.google.firebase.firestore.SetOptions
 import kotlinx.coroutines.tasks.await
 
 /**
- * 🔐 FirestoreAuth
+ * 🔐 FirestoreAuth (V.10.17 - Stainless Steel Data Alignment)
  * Single Source of Truth untuk manajemen akun di Cloud.
  * Dioptimalkan untuk performa tinggi dengan Direct Document ID Access.
  */
@@ -31,7 +31,7 @@ object FirestoreAuth {
         uid: String,
         email: String,
         schoolName: String,
-        sekolahId: String,
+        sekolahId: String, // Parameter dari AuthViewModel
         deviceId: String,
         expiryDate: Timestamp
     ) {
@@ -40,7 +40,11 @@ object FirestoreAuth {
                 "uid" to uid,
                 "email" to email,
                 "school_name" to schoolName,
-                "sekolahId" to sekolahId,
+                
+                // 🔥 THE CRUCIAL FIX: Menyelaraskan nama Key Firestore dengan UserProfile & FaceViewModel
+                // Sebelumnya "sekolahId", sekarang resmi menjadi "schoolId".
+                "schoolId" to sekolahId, 
+                
                 "device_id" to deviceId,
                 "status" to "PENDING", // 🚀 UPDATE: Admin baru tidak langsung aktif
                 "role" to "ADMIN",
@@ -56,7 +60,7 @@ object FirestoreAuth {
                 .set(userData, SetOptions.merge())
                 .await()
             
-            Log.d(TAG, "✅ Admin PENDING created: $uid")
+            Log.d(TAG, "✅ Admin PENDING created dengan schoolId: $sekolahId")
         } catch (e: Exception) {
             Log.e(TAG, "❌ Failed to create admin account", e)
             throw e
@@ -94,6 +98,7 @@ object FirestoreAuth {
     /**
      * Mengaktifkan akun yang sebelumnya diundang oleh Admin.
      * Menempelkan UID permanen dan mengubah status menjadi ACTIVE.
+     * Catatan: schoolId biasanya sudah di-set oleh Admin saat membuat undangan ini.
      */
     suspend fun activateStaffAccount(
         uid: String,

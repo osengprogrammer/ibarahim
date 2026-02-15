@@ -47,7 +47,7 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
         viewModelScope.launch {
             userDao.getCurrentUserFlow().collect { user ->
                 if (user != null) {
-                    val sid = user.sekolahId
+                    val sid = user.schoolId
                     Log.d(TAG, "🛡️ Initializing Monitor for School: $sid")
                     listenToLiveAttendance(sid ?: "") 
                 } else {

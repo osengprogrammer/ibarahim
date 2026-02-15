@@ -18,6 +18,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -27,27 +28,33 @@ import com.example.crashcourse.db.MasterClassWithNames
 import com.example.crashcourse.ui.SyncState
 import com.example.crashcourse.ui.components.*
 import com.example.crashcourse.ui.theme.AzuraPrimary
-import com.example.crashcourse.viewmodel.*
+import com.example.crashcourse.viewmodel.FaceViewModel
+import com.example.crashcourse.viewmodel.SyncViewModel
+import com.example.crashcourse.viewmodel.MasterClassViewModel
 
+/**
+ * 📑 FaceListScreen (V.10.30 - Build Success)
+ * Menggunakan nama parameter 'faceVM' agar sinkron dengan NavGraph.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FaceListScreen(
     onNavigateBack: () -> Unit,
     onNavigateToEdit: (String) -> Unit,
+    // 🔥 PENTING: Nama parameter ini harus 'faceVM' agar sesuai panggilan di NavGraph
     faceVM: FaceViewModel = viewModel(),
     syncVM: SyncViewModel = viewModel(),
     masterClassVM: MasterClassViewModel = viewModel()
 ) {
-    // 🔥 DATA DARI VIEWMODEL (Reactive & Scoped)
+    // 📊 OBSERVATION
     val faces by faceVM.filteredFaces.collectAsStateWithLifecycle()
     val syncState by syncVM.syncState.collectAsStateWithLifecycle()
     val masterClasses by masterClassVM.masterClassesWithNames.collectAsStateWithLifecycle(initialValue = emptyList())
     
-    // 🔥 FILTER STATES (Dihubungkan ke ViewModel)
     val searchQuery by faceVM.searchQuery.collectAsStateWithLifecycle()
     val selectedUnit by faceVM.selectedUnit.collectAsStateWithLifecycle()
 
-    // 🚀 AUTO-SYNC SAAT LAYAR DIBUKA
+    // 🚀 Trigger Sync saat layar dibuka
     LaunchedEffect(Unit) {
         syncVM.syncStudentsDown()
     }
@@ -67,7 +74,6 @@ fun FaceListScreen(
                 .fillMaxSize()
                 .background(Color(0xFFF5F5F5))
         ) {
-            // --- 🛠️ COMPONENT: FILTER CARD ---
             FaceFilterSection(
                 searchQuery = searchQuery,
                 selectedUnit = selectedUnit,
@@ -77,7 +83,6 @@ fun FaceListScreen(
                 onReset = { faceVM.resetFilters() }
             )
 
-            // --- 📑 COMPONENT: LIST CONTENT ---
             FaceListContent(
                 faces = faces,
                 isFiltering = searchQuery.isNotEmpty() || selectedUnit != null,
@@ -86,7 +91,6 @@ fun FaceListScreen(
             )
         }
 
-        // Overlay Sync Status (Floating)
         SyncOverlay(
             syncState = syncState,
             onDismiss = { syncVM.resetState() }
@@ -95,7 +99,7 @@ fun FaceListScreen(
 }
 
 // ==========================================
-// 🛠️ SUB-COMPONENTS (Pecahan UI)
+// 🛠️ SUB-COMPONENTS
 // ==========================================
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -132,7 +136,7 @@ fun FaceFilterSection(
     onReset: () -> Unit
 ) {
     Card(
-        modifier = Modifier.fillMaxWidth().padding(16.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = Color.White),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
@@ -146,20 +150,21 @@ fun FaceFilterSection(
             )
 
             AzuraDropdown(
-                label = "Unit / Kelas",
+                label = "Filter Berdasarkan Unit",
                 options = masterClasses,
-                selected = selectedUnit?.className ?: "",
+                selected = selectedUnit,
                 onSelected = { onUnitSelected(it as? MasterClassWithNames) },
                 itemLabel = { (it as? MasterClassWithNames)?.className ?: "" }
             )
 
             TextButton(
                 onClick = onReset,
-                modifier = Modifier.align(Alignment.End)
+                modifier = Modifier.align(Alignment.End),
+                colors = ButtonDefaults.textButtonColors(contentColor = Color.Gray)
             ) {
                 Icon(Icons.Default.FilterAltOff, null, modifier = Modifier.size(16.dp))
                 Spacer(Modifier.width(8.dp))
-                Text("Reset Filter")
+                Text("Hapus Filter")
             }
         }
     }
@@ -177,7 +182,7 @@ fun ColumnScope.FaceListContent(
             EmptyFacesView(isFiltering = isFiltering)
         } else {
             LazyColumn(
-                contentPadding = PaddingValues(16.dp, 16.dp, 16.dp, 80.dp),
+                contentPadding = PaddingValues(16.dp, 8.dp, 16.dp, 80.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier.fillMaxSize()
             ) {
@@ -198,24 +203,27 @@ fun StudentListItem(face: FaceEntity, onEdit: () -> Unit, onDelete: () -> Unit) 
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = Color.White),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-        shape = RoundedCornerShape(16.dp)
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+        shape = RoundedCornerShape(12.dp)
     ) {
         Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             AsyncImage(
                 model = face.photoUrl,
                 contentDescription = null,
-                modifier = Modifier.size(50.dp).clip(CircleShape).background(Color.LightGray),
+                modifier = Modifier.size(50.dp).clip(CircleShape).background(Color(0xFFEEEEEE)),
                 contentScale = ContentScale.Crop
             )
+            
             Spacer(modifier = Modifier.width(16.dp))
+            
             Column(modifier = Modifier.weight(1f)) {
-                Text(text = face.name, fontWeight = FontWeight.Bold)
-                Text(text = "ID: ${face.studentId} • ${face.className}", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                Text(text = face.name, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyLarge, maxLines = 1)
+                Text(text = "ID: ${face.studentId}", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
             }
+            
             Row {
-                IconButton(onClick = onEdit) { Icon(Icons.Default.Edit, null, tint = AzuraPrimary) }
-                IconButton(onClick = onDelete) { Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error) }
+                IconButton(onClick = onEdit) { Icon(Icons.Default.Edit, "Edit", tint = AzuraPrimary, modifier = Modifier.size(20.dp)) }
+                IconButton(onClick = onDelete) { Icon(Icons.Default.DeleteSweep, "Hapus", tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(20.dp)) }
             }
         }
     }
@@ -223,7 +231,7 @@ fun StudentListItem(face: FaceEntity, onEdit: () -> Unit, onDelete: () -> Unit) 
 
 @Composable
 fun SyncOverlay(syncState: SyncState, onDismiss: () -> Unit) {
-    Box(modifier = Modifier.fillMaxSize().padding(16.dp), contentAlignment = Alignment.BottomCenter) {
+    Box(modifier = Modifier.fillMaxSize().padding(bottom = 32.dp), contentAlignment = Alignment.BottomCenter) {
         AnimatedVisibility(
             visible = syncState !is SyncState.Idle,
             enter = fadeIn() + slideInVertically { it },
@@ -236,23 +244,18 @@ fun SyncOverlay(syncState: SyncState, onDismiss: () -> Unit) {
 
 @Composable
 fun SyncStatusCard(state: SyncState, onDismiss: () -> Unit) {
-    val color = when (state) {
-        is SyncState.Success -> Color(0xFF4CAF50)
-        is SyncState.Error -> Color(0xFFE53935)
-        else -> AzuraPrimary
+    val (containerColor, message) = when (state) {
+        is SyncState.Loading -> Color(0xFF333333) to state.message
+        is SyncState.Success -> Color(0xFF4CAF50) to state.message
+        is SyncState.Error -> Color(0xFFE53935) to state.message
+        SyncState.Idle -> Color.Transparent to ""
     }
 
-    Surface(color = color, shape = RoundedCornerShape(12.dp), shadowElevation = 8.dp) {
-        Row(modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-            val message = when (state) {
-                is SyncState.Loading -> state.message
-                is SyncState.Success -> state.message
-                is SyncState.Error -> state.message
-                else -> ""
-            }
-            Text(text = message, color = Color.White)
+    Surface(color = containerColor, shape = RoundedCornerShape(24.dp), modifier = Modifier.padding(horizontal = 24.dp)) {
+        Row(modifier = Modifier.padding(start = 20.dp, end = 8.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(text = message, color = Color.White, style = MaterialTheme.typography.bodyMedium)
             if (state !is SyncState.Loading) {
-                IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, null, tint = Color.White) }
+                IconButton(onClick = onDismiss) { Icon(Icons.Default.Close, null, tint = Color.White, modifier = Modifier.size(18.dp)) }
             }
         }
     }

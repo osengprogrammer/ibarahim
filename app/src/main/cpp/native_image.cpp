@@ -26,31 +26,29 @@ extern "C" {
  * =====================================================
  * 🛡️ LOGIC FOR: com.example.crashcourse.util.NativeKeyStore
  * =====================================================
- * Mengambil ISO Key rahasia untuk validasi Device ID.
  */
 JNIEXPORT jstring JNICALL
 Java_com_example_crashcourse_util_NativeKeyStore_getIsoKey(
     JNIEnv* env, jobject /* this */) {
     
-    // Kita susun string "AZURA_SECURE_2024" secara manual
-    // agar tidak muncul sebagai plaintext "AZURA..." di hex editor.
     std::string key = "";
     key += 'A'; key += 'Z'; key += 'U'; key += 'R'; key += 'A';
     key += '_';
     key += 'S'; key += 'E'; key += 'C'; key += 'U'; key += 'R'; key += 'E';
     key += '_';
-    key += '2'; key += '0'; key += '2'; key += '6'; // Update ke 2026 sesuai tahun sekarang
+    key += '2'; key += '0'; key += '2'; key += '6'; 
     
     return env->NewStringUTF(key.c_str());
 }
 
 /**
  * =====================================================
- * LOGIC FOR: com.example.crashcourse.utils.NativeMath
+ * ✅ LOGIC FOR: com.example.crashcourse.ml.nativeutils.NativeMath
+ * (Alamat diperbarui agar sinkron dengan NativeMath.kt baru)
  * =====================================================
  */
 JNIEXPORT jfloat JNICALL
-Java_com_example_crashcourse_utils_NativeMath_cosineDistance(
+Java_com_example_crashcourse_ml_nativeutils_NativeMath_cosineDistance(
     JNIEnv* env, jobject /* this */, jfloatArray a, jfloatArray b) {
     
     jsize len = env->GetArrayLength(a);
@@ -80,7 +78,7 @@ Java_com_example_crashcourse_utils_NativeMath_cosineDistance(
 }
 
 JNIEXPORT void JNICALL
-Java_com_example_crashcourse_utils_NativeMath_preprocessImage(
+Java_com_example_crashcourse_ml_nativeutils_NativeMath_preprocessImage(
     JNIEnv* env, jobject /* this */, jobject byteBuffer, jint size) {
     
     float* pixels = (float*)env->GetDirectBufferAddress(byteBuffer);
@@ -93,7 +91,7 @@ Java_com_example_crashcourse_utils_NativeMath_preprocessImage(
 
 /**
  * =====================================================
- * LOGIC FOR: com.example.crashcourse.ml.nativeutils.NativeImageProcessor
+ * ✅ LOGIC FOR: com.example.crashcourse.ml.nativeutils.NativeImageProcessor
  * =====================================================
  */
 JNIEXPORT void JNICALL

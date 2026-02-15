@@ -1,100 +1,117 @@
 package com.example.crashcourse.repository
 
 import android.app.Application
+import android.util.Log
 import com.example.crashcourse.db.AppDatabase
 import com.example.crashcourse.db.CheckInRecord
 import com.example.crashcourse.firestore.FirestoreAttendance
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
-import java.time.LocalDate
 import java.time.LocalDateTime
-import java.time.LocalTime
 
 /**
- * 📂 AttendanceRepository
- * Pusat kendali transaksi absensi, sinkronisasi cloud, dan manajemen history.
+ * 📊 AttendanceRepository (V.10.20 - Build Success Ready)
+ * Jantung manajemen data absensi AzuraTech.
+ * Menghubungkan Room (Lokal) dan Firestore (Cloud).
  */
 class AttendanceRepository(application: Application) {
     private val db = AppDatabase.getInstance(application)
     private val checkInDao = db.checkInRecordDao()
 
     companion object {
+        private const val TAG = "AttendanceRepo"
         private const val CHECK_IN_COOLDOWN_SEC = 30L
     }
 
-    // 1. Flow Data Absensi (Live Data untuk UI History/Laporan)
-    fun getAllRecordsFlow(): Flow<List<CheckInRecord>> = checkInDao.getAllRecordsFlow()
+    // ==========================================
+    // 🔍 READ OPERATIONS
+    // ==========================================
 
-    // 🔥 2. BRIDGE UNTUK RECOGNITION VIEWMODEL (SOLUSI ERROR BUILD)
-    // Fungsi ini wajib ada agar RecognitionViewModel bisa mengecek cooldown sebelum simpan
-    suspend fun getLastRecordForClass(studentId: String, className: String): CheckInRecord? = withContext(Dispatchers.IO) {
-        checkInDao.getLastRecordForClass(studentId, className)
-    }
+    fun getRecordsBySchoolFlow(schoolId: String): Flow<List<CheckInRecord>> =
+        checkInDao.getAllRecordsBySchoolFlow(schoolId)
 
-    // 3. Logika Simpan Absensi (Scanner AI & Input Manual)
-    suspend fun saveAttendance(record: CheckInRecord, sekolahId: String): String? = withContext(Dispatchers.IO) {
+    suspend fun getLastRecordForClass(studentId: String, className: String): CheckInRecord? = 
+        withContext(Dispatchers.IO) { checkInDao.getLastRecordForClass(studentId, className) }
+
+    // ==========================================
+    // ✍️ WRITE & SYNC OPERATIONS
+    // ==========================================
+
+    suspend fun saveAttendance(record: CheckInRecord, schoolId: String): String = withContext(Dispatchers.IO) {
         try {
-            // Cek Cooldown (Double Check di level Repo)
             val lastRecord = checkInDao.getLastRecordForClass(record.studentId, record.className)
             if (lastRecord != null && lastRecord.timestamp.isAfter(LocalDateTime.now().minusSeconds(CHECK_IN_COOLDOWN_SEC))) {
                 return@withContext "COOLDOWN"
             }
 
-            // Simpan Lokal
-            val rowId = checkInDao.insert(record)
-            val saved = record.copy(id = rowId.toInt())
-
-            // Simpan ke Cloud Firestore
-            FirestoreAttendance.saveCheckIn(saved, sekolahId)
-            return@withContext "SUCCESS"
+            // 1. Simpan Lokal
+            val localId = checkInDao.insert(record)
+            
+            // 2. Upload Cloud (Panggil Firestore)
+            val firestoreId = FirestoreAttendance.saveCheckIn(record, schoolId)
+            
+            if (firestoreId != null) {
+                checkInDao.markAsSynced(localId.toInt(), firestoreId)
+                return@withContext "SUCCESS"
+            } else {
+                return@withContext "SAVED_OFFLINE"
+            }
         } catch (e: Exception) {
-            return@withContext e.message
+            Log.e(TAG, "Error saving attendance", e)
+            return@withContext e.message ?: "UNKNOWN_ERROR"
         }
     }
 
-    // 4. 🛡️ SMART SYNC (Cloud -> Lokal)
-    suspend fun syncAttendance(cloudRecords: List<CheckInRecord>) = withContext(Dispatchers.IO) {
-        if (cloudRecords.isEmpty()) return@withContext
-        
-        val todayStart = LocalDate.now().atStartOfDay()
-        val todayEnd = LocalDate.now().atTime(LocalTime.MAX)
-
-        val localRecordsToday = checkInDao.getRecordsBetween(todayStart, todayEnd)
-        val localKeys = localRecordsToday.map { "${it.studentId}_${it.timestamp}" }.toSet()
-
-        val newRecords = cloudRecords.filter { cloud ->
-            val uniqueKey = "${cloud.studentId}_${cloud.timestamp}"
-            !localKeys.contains(uniqueKey)
-        }
-
-        if (newRecords.isNotEmpty()) {
-            checkInDao.insertAll(newRecords)
+    suspend fun syncAttendance(records: List<CheckInRecord>) = withContext(Dispatchers.IO) {
+        try {
+            checkInDao.insertAll(records)
+        } catch (e: Exception) { 
+            Log.e(TAG, "❌ syncAttendance failed", e) 
         }
     }
 
-    // 5. 📅 FETCH HISTORY
-    suspend fun fetchHistory(sekolahId: String, startMillis: Long, endMillis: Long): List<CheckInRecord> = withContext(Dispatchers.IO) {
-        FirestoreAttendance.fetchHistoryRecords(sekolahId, startMillis, endMillis)
+    suspend fun fetchHistoricalData(schoolId: String, startM: Long, endM: Long): List<CheckInRecord> {
+        return try {
+            // 🔥 Error line 80: Resolve ini dengan update FirestoreAttendance.kt
+            FirestoreAttendance.fetchHistoricalData(schoolId, startM, endM)
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ fetchHistoricalData failed", e)
+            emptyList()
+        }
     }
 
-    // 6. Logika Update Status (PRESENT/SAKIT/IZIN)
+    // ==========================================
+    // 🛠️ CRUD HANDLERS (Update & Delete)
+    // ==========================================
+
     suspend fun updateStatus(record: CheckInRecord, newStatus: String) = withContext(Dispatchers.IO) {
-        // Update Room menggunakan ID (Lebih aman sesuai DAO terbaru)
-        checkInDao.updateStatusById(record.id, newStatus)
-        
-        // Update Firestore
-        val timeKey = record.timestamp.toString().replace(Regex("[^0-9]"), "").take(12)
-        val docId = "${record.studentId}_$timeKey"
-        FirestoreAttendance.updateAttendanceStatus(docId, newStatus)
+        try {
+            // 1. Update Room (Lokal)
+            checkInDao.updateStatusById(record.id, newStatus)
+            
+            // 2. Update Cloud (Panggil Firestore)
+            record.firestoreId?.let { fsId ->
+                // 🔥 Error line 98: Resolve ini dengan update FirestoreAttendance.kt
+                FirestoreAttendance.updateStatus(fsId, newStatus)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ updateStatus failed", e)
+        }
     }
 
-    // 7. Logika Delete Log
     suspend fun deleteRecord(record: CheckInRecord) = withContext(Dispatchers.IO) {
-        val timeKey = record.timestamp.toString().replace(Regex("[^0-9]"), "").take(12)
-        val docId = "${record.studentId}_$timeKey"
-        
-        FirestoreAttendance.deleteAttendanceLog(docId)
-        checkInDao.delete(record)
+        try {
+            // 1. Hapus Lokal
+            checkInDao.delete(record)
+            
+            // 2. Hapus Cloud (Panggil Firestore)
+            record.firestoreId?.let { fsId ->
+                // 🔥 Error line 112: Resolve ini dengan update FirestoreAttendance.kt
+                FirestoreAttendance.deleteRecord(fsId)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ deleteRecord failed", e)
+        }
     }
 }

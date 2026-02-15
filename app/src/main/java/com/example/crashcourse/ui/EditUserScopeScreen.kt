@@ -73,11 +73,11 @@ fun EditUserScopeScreen(
     LaunchedEffect(userId) {
         try {
             isLoading = true
-            debugMessage = "Sekolah ID: '${authState.sekolahId}'"
+            debugMessage = "Sekolah ID: '${authState.schoolId}'"
             
             // A. AMBIL MASTER ROMBEL DARI SEKOLAH INI
             val masterSnapshot = db.collection(FirestorePaths.MASTER_CLASSES)
-                .whereEqualTo(Constants.KEY_SEKOLAH_ID, authState.sekolahId)
+                .whereEqualTo(Constants.KEY_SEKOLAH_ID, authState.schoolId)
                 .get().await()
             
             if (masterSnapshot.isEmpty) {

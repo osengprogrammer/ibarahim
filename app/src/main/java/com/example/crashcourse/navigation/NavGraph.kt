@@ -1,5 +1,6 @@
 package com.example.crashcourse.navigation
 
+import android.util.Log
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.navigation.NavHostController
@@ -9,41 +10,44 @@ import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import androidx.lifecycle.viewmodel.compose.viewModel 
 
-// 🚀 CORE SCREENS & COMPONENTS
+// 🚀 UI IMPORTS
 import com.example.crashcourse.ui.*
 import com.example.crashcourse.ui.auth.*
 import com.example.crashcourse.ui.add.*
 import com.example.crashcourse.ui.edit.*
 import com.example.crashcourse.ui.checkin.*
+import com.example.crashcourse.ui.checkin.components.CheckInLoadingView
 import com.example.crashcourse.ui.options.*
 import com.example.crashcourse.ui.monitor.*
 import com.example.crashcourse.ui.management.*
-import com.example.crashcourse.ui.face.*
-import com.example.crashcourse.LoadingScreen 
+import com.example.crashcourse.ui.face.FaceListScreen 
 
 // 🚀 VIEWMODELS & STATES
 import com.example.crashcourse.viewmodel.AuthState
 import com.example.crashcourse.viewmodel.AuthViewModel
-import com.example.crashcourse.viewmodel.RegisterViewModel
 
+private const val NAV_TAG = "AzuraNav"
+
+/**
+ * 🗺️ Azura Tech Navigation Graph (V.12.0 - Convergence Version)
+ * Fokus: Mengarahkan Auth ke MainScreen (Container Bottom Nav).
+ */
 @Composable
 fun NavGraph(
     navController: NavHostController, 
     authState: AuthState,
-    viewModel: AuthViewModel, 
+    authViewModel: AuthViewModel, 
     onLogoutRequest: () -> Unit
 ) {
-    // 🎯 1. CENTRALIZED NAVIGATION OBSERVER
-    // Mengatur aliran navigasi global agar tidak terjadi loop/refresh terus-menerus
+    // 🎯 GLOBAL REDIRECT LOGIC
     LaunchedEffect(authState) {
         when (authState) {
             is AuthState.Active -> {
-                // Hanya pindah ke Main jika saat ini masih di layar Login/Register
-                val currentRoute = navController.currentBackStackEntry?.destination?.route
-                if (currentRoute == Screen.Login.route || currentRoute == Screen.Register.route) {
-                    navController.navigate(Screen.Main.route) {
-                        popUpTo(0) { inclusive = true }
-                    }
+                Log.i(NAV_TAG, "✅ User Active. Entering Main Container...")
+                // Arahkan ke rute "Main" (Yang berisi Bottom Nav)
+                navController.navigate("main_root") {
+                    popUpTo(Screen.Login.route) { inclusive = true }
+                    launchSingleTop = true
                 }
             }
             is AuthState.LoggedOut -> {
@@ -51,133 +55,115 @@ fun NavGraph(
                     popUpTo(0) { inclusive = true }
                 }
             }
-            is AuthState.StatusWaiting -> {
-                // Hanya pindah jika belum di layar Waiting
-                if (navController.currentBackStackEntry?.destination?.route != Screen.StatusWaiting.route) {
-                    navController.navigate(Screen.StatusWaiting.route) {
-                        popUpTo(Screen.Login.route) { inclusive = true }
-                    }
-                }
-            }
-            else -> {} 
+            else -> { /* Biarkan layar Checking/Loading menangani sisanya */ }
         }
     }
 
-    // 🎯 2. SETUP NAVHOST
     NavHost(
         navController = navController, 
         startDestination = Screen.Login.route 
     ) {
         
         // ==========================================
-        // 🔐 AUTH ROUTES
+        // 🔐 AUTHENTICATION FLOW
         // ==========================================
         
         composable(Screen.Login.route) {
-            // ✅ FIX: Hapus LaunchedEffect internal agar tidak berantem dengan Global Observer
             LoginScreen(
                 onNavigateToRegister = { navController.navigate(Screen.Register.route) },
-                viewModel = viewModel
+                viewModel = authViewModel
             )
         }
         
         composable(Screen.Register.route) {
             RegisterScreen(
                 onNavigateToLogin = { navController.navigate(Screen.Login.route) },
-                viewModel = viewModel 
+                viewModel = authViewModel 
             )
         }
         
         composable(Screen.StatusWaiting.route) { 
-            StatusWaitingScreen(viewModel = viewModel) 
+            StatusWaitingScreen(viewModel = authViewModel) 
         }
 
         // ==========================================
-        // 🏠 ACTIVE ROUTES (ADMIN & STAFF)
+        // 🏠 THE MASTER CONTAINER (Bottom Nav)
         // ==========================================
         
-        composable(Screen.Main.route) {
-            when (authState) {
-                is AuthState.Active -> {
-                    MainScreen(
-                        authState = authState,
-                        onNavigateToCheckIn = { sessionName -> 
-                            navController.navigate("checkin_screen/$sessionName") 
-                        },
-                        onNavigateToAdmin = { 
-                            // Proteksi tambahan: hanya navigasi jika role ADMIN
-                            if (authState.role == "ADMIN") {
-                                navController.navigate(Screen.Admin.route) 
-                            }
-                        },
-                        onLogoutRequest = onLogoutRequest
-                    )
-                }
-                is AuthState.Loading -> LoadingScreen(authState.message)
-                else -> LoadingScreen("Mempersiapkan data sesi...")
+        composable("main_root") {
+            if (authState is AuthState.Active) {
+                // ✅ Inilah kuncinya! MainScreen memegang Dashboard, Scanner, dan Profile.
+                MainScreen(
+                    authState = authState,
+                    navController = navController,
+                    onLogoutRequest = onLogoutRequest
+                )
+            } else {
+                CheckInLoadingView() 
             }
         }
 
-        composable(Screen.Profile.route) { 
-            if (authState is AuthState.Active) {
-                ProfileScreen(authState, { onLogoutRequest() }, { navController.popBackStack() })
-            } else { LoadingScreen() }
-        }
-
-        composable(
-            route = "checkin_screen/{sessionName}",
-            arguments = listOf(navArgument("sessionName") { type = NavType.StringType })
-        ) { backStackEntry ->
-            val sessionName = backStackEntry.arguments?.getString("sessionName") ?: "General"
-            CheckInScreen(
-                useBackCamera = true,
-                activeSession = sessionName
-            )
-        }
-        
         // ==========================================
-        // ⚙️ MANAGEMENT ROUTES (DIBATASI JIKA PERLU)
+        // 🛠️ SUBSCREENS (Masih butuh NavController)
         // ==========================================
-
-        composable(Screen.Admin.route) { 
-            if (authState is AuthState.Active) AdminDashboardScreen(navController, authState) else LoadingScreen() 
-        }
         
-        composable(Screen.Options.route) { 
-            if (authState is AuthState.Active) OptionsManagementScreen({ navController.popBackStack() }) else LoadingScreen() 
-        }
-
-        composable(Screen.MasterClass.route) { 
-            if (authState is AuthState.Active) MasterClassManagementScreen({ navController.popBackStack() }) else LoadingScreen() 
-        }
-
-        composable(Screen.LiveMonitor.route) { 
-            if (authState is AuthState.Active) LiveMonitorScreen({ navController.popBackStack() }) else LoadingScreen() 
-        }
-
+        // Rute ini tetap di sini karena dibuka sebagai "layar penuh" dari dashboard
         composable(Screen.History.route) {
-            if (authState is AuthState.Active) CheckInRecordScreen(authState, { navController.popBackStack() }) else LoadingScreen() 
+            if (authState is AuthState.Active) {
+                CheckInRecordScreen(
+                    authState = authState, 
+                    onNavigateBack = { navController.popBackStack() }
+                ) 
+            } else { CheckInLoadingView() } 
+        }
+
+        composable(Screen.UserManagement.route) {
+            if (authState is AuthState.Active) {
+                UserManagementScreen(
+                    authState = authState, 
+                    onBack = { navController.popBackStack() }, 
+                    onEditScope = { id -> navController.navigate(Screen.EditUserScope.createRoute(id)) }
+                )
+            } else { CheckInLoadingView() }
         }
 
         composable(Screen.FaceList.route) {
-            if (authState is AuthState.Active) FaceListScreen({ navController.popBackStack() }, { id -> navController.navigate(Screen.EditUser.createRoute(id)) }) else LoadingScreen() 
+            if (authState is AuthState.Active) {
+                FaceListScreen(
+                    faceVM = viewModel(),
+                    onNavigateBack = { navController.popBackStack() }, 
+                    onNavigateToEdit = { id -> navController.navigate(Screen.EditUser.createRoute(id)) }
+                )
+            } else { CheckInLoadingView() }
         }
 
         composable(Screen.RegistrationMenu.route) {
-            if (authState is AuthState.Active) RegistrationMenuScreen({ navController.navigate(Screen.Add.route) }, { navController.navigate(Screen.Bulk.route) }, { navController.navigate(Screen.SingleUpload.route) }, { navController.popBackStack() }) else LoadingScreen() 
+            if (authState is AuthState.Active) {
+                RegistrationMenuScreen(
+                    onNavigateToSingleAdd = { navController.navigate(Screen.Add.route) }, 
+                    onNavigateToBulk = { navController.navigate(Screen.Bulk.route) }, 
+                    onNavigateToGallery = { navController.navigate(Screen.SingleUpload.route) }, 
+                    onBack = { navController.popBackStack() } 
+                )
+            } else { CheckInLoadingView() }
         }
         
-        composable(Screen.Add.route) { AddUserScreen({ navController.popBackStack() }, { navController.popBackStack() }) }
+        composable(Screen.Add.route) { 
+            AddUserScreen(
+                onNavigateBack = { navController.popBackStack() }, 
+                onUpdateSuccess = { navController.popBackStack() }
+            ) 
+        }
 
         composable(Screen.Bulk.route) { 
-            val registerViewModel: RegisterViewModel = viewModel()
-            BulkRegistrationScreen(registerViewModel, { navController.popBackStack() }) 
+            BulkRegistrationScreen(onNavigateBack = { navController.popBackStack() }) 
         }
         
-        composable(Screen.SingleUpload.route) { SingleUploadScreen({ navController.popBackStack() }, { navController.popBackStack() }) }
-
-        composable(Screen.UserManagement.route) {
-            if (authState is AuthState.Active) UserManagementScreen(authState, { navController.popBackStack() }, { id -> navController.navigate(Screen.EditUserScope.createRoute(id)) }) else LoadingScreen() 
+        composable(Screen.SingleUpload.route) { 
+            SingleUploadScreen(
+                onNavigateBack = { navController.popBackStack() }, 
+                onUpdateSuccess = { navController.popBackStack() }
+            ) 
         }
 
         composable(
@@ -185,15 +171,35 @@ fun NavGraph(
             arguments = listOf(navArgument("userId") { type = NavType.StringType })
         ) { backStackEntry ->
             val userId = backStackEntry.arguments?.getString("userId") ?: ""
-            if (authState is AuthState.Active) EditUserScopeScreen(userId, authState, { navController.popBackStack() }) else LoadingScreen() 
+            if (authState is AuthState.Active) {
+                EditUserScopeScreen(
+                    userId = userId, 
+                    authState = authState, 
+                    onBack = { navController.popBackStack() }
+                ) 
+            } else { CheckInLoadingView() }
         }
         
         composable(
             route = Screen.EditUser.route,
-            arguments = listOf(navArgument("userId") { type = NavType.StringType; nullable = false })
+            arguments = listOf(navArgument("userId") { type = NavType.StringType })
         ) { backStackEntry ->
             val userId = backStackEntry.arguments?.getString("userId") ?: ""
-            EditUserScreen(userId, { navController.popBackStack() }, { navController.popBackStack() })
+            EditUserScreen(
+                studentId = userId, 
+                onNavigateBack = { navController.popBackStack() }, 
+                onUpdateSuccess = { navController.popBackStack() }
+            )
+        }
+
+        composable(Screen.MasterClass.route) { 
+            MasterClassManagementScreen(onNavigateBack = { navController.popBackStack() }) 
+        }
+        composable(Screen.Options.route) { 
+            OptionsManagementScreen(onNavigateBack = { navController.popBackStack() }) 
+        }
+        composable(Screen.LiveMonitor.route) { 
+            LiveMonitorScreen(onBack = { navController.popBackStack() }) 
         }
     }
 }

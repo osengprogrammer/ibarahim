@@ -4,114 +4,83 @@ import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
-import com.example.crashcourse.utils.Constants
+import androidx.room.TypeConverters
 
-/**
- * 👤 Azura Tech Face Entity
- * * Arsitektur ini mendukung skenario Many-to-Many:
- * Kolom [className] akan menyimpan string CSV (contoh: "Socio Linguistic, Translation") 
- * yang diproses oleh ViewModel sebelum disimpan ke Room.
- */
 @Entity(
     tableName = "students",
     indices = [
-        Index(value = ["sekolahId"]),
-        Index(value = ["className"]),
-        Index(value = ["studentId"], unique = true)
+        // ⚡ Index untuk filter "Global Load" (Wajib ada!)
+        Index(value = ["schoolId"]),
+        
+        // 🔍 Index nama buat fitur pencarian manual (Search Bar)
+        Index(value = ["name"]) 
+        
+        // ❌ HAPUS Index studentId (Karena PrimaryKey sudah otomatis Index)
     ]
 )
+// TypeConverters dipanggil di sini agar FloatArray & List<String> bisa disimpan
+@TypeConverters(Converters::class)
 data class FaceEntity(
+    
+    /**
+     * 🆔 Primary Key
+     * Gunakan NISN atau ID unik dari server.
+     */
     @PrimaryKey 
     @ColumnInfo(name = "studentId")
     val studentId: String, 
 
-    @ColumnInfo(name = "sekolahId")
-    val sekolahId: String,
-    
-    val firestoreId: String? = null,
-
-    val name: String,
-    val photoUrl: String? = null,
+    /**
+     * 🏫 Tenant ID
+     * Kunci utama untuk pemisahan data antar sekolah/kantor.
+     * (Renamed from sekolahId for consistency)
+     */
+    @ColumnInfo(name = "schoolId")
+    val schoolId: String,
     
     /**
-     * 🧠 AI Embedding
-     * Memerlukan Converters.kt untuk mengubah FloatArray menjadi format yang didukung Room.
+     * 🧠 AI Biometric Vector (192 floats)
+     * Converter akan mengubah ini menjadi BLOB (ByteArray) agar hemat memori & cepat.
      */
+    @ColumnInfo(name = "embedding")
     val embedding: FloatArray, 
 
-    // --- Master Data Mapping (ID) ---
-    val classId: Int? = null,
-    val subClassId: Int? = null,
-    val gradeId: Int? = null,
-    val subGradeId: Int? = null,
-    val programId: Int? = null,
-    val roleId: Int? = null,
-
-    // --- UI Denormalized Fields (Names) ---
     /**
-     * Menyimpan gabungan nama Rombel/Mata Kuliah. 
-     * Contoh: "Socio Linguistic, Translation"
+     * 📚 Enrolled Classes / Divisions
+     * Menggunakan List<String> agar mudah dicek di Logic Kotlin.
+     * Contoh: ["X-RPL-1", "Math-Club", "Basket"]
+     * Disimpan di DB sebagai JSON: "[\"X-RPL-1\", \"Math-Club\"]"
      */
-    val className: String = "",
-    val subClass: String = "",
-    val grade: String = "",
-    val subGrade: String = "",
-    val program: String = "",
-    val role: String = "",
-
+    @ColumnInfo(name = "enrolledClasses")
+    val enrolledClasses: List<String> = emptyList(), 
+    
+    val name: String,
+    
+    val photoUrl: String? = null,
+    
+    // Metadata Tambahan (Opsional)
+    val subClass: String = "", // Misal: "Shift Pagi"
+    val grade: String = "",    // Misal: "Staff" atau "12"
     val timestamp: Long = System.currentTimeMillis()
 ) {
-    /**
-     * ⚠️ Penting: Override equals dan hashCode karena menggunakan FloatArray.
-     * Tanpa ini, perbandingan objek biometrik tidak akan akurat.
-     */
+    // 🛡️ WAJIB: Override equals untuk membandingkan isi Array
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
-        if (other !is FaceEntity) return false
+        if (javaClass != other?.javaClass) return false
+
+        other as FaceEntity
 
         if (studentId != other.studentId) return false
-        if (sekolahId != other.sekolahId) return false
-        if (firestoreId != other.firestoreId) return false
-        if (name != other.name) return false
-        if (photoUrl != other.photoUrl) return false
-        if (!embedding.contentEquals(other.embedding)) return false
-        if (classId != other.classId) return false
-        if (subClassId != other.subClassId) return false
-        if (gradeId != other.gradeId) return false
-        if (subGradeId != other.subGradeId) return false
-        if (programId != other.programId) return false
-        if (roleId != other.roleId) return false
-        if (className != other.className) return false
-        if (subClass != other.subClass) return false
-        if (grade != other.grade) return false
-        if (subGrade != other.subGrade) return false
-        if (program != other.program) return false
-        if (role != other.role) return false
-        if (timestamp != other.timestamp) return false
+        // Konten vector harus sama persis
+        if (!embedding.contentEquals(other.embedding)) return false 
 
         return true
     }
 
+    // 🛡️ WAJIB: Override hashCode agar entity ini bisa masuk ke Set/Map dengan benar
     override fun hashCode(): Int {
         var result = studentId.hashCode()
-        result = 31 * result + sekolahId.hashCode()
-        result = 31 * result + (firestoreId?.hashCode() ?: 0)
-        result = 31 * result + name.hashCode()
-        result = 31 * result + (photoUrl?.hashCode() ?: 0)
         result = 31 * result + embedding.contentHashCode()
-        result = 31 * result + (classId ?: 0)
-        result = 31 * result + (subClassId ?: 0)
-        result = 31 * result + (gradeId ?: 0)
-        result = 31 * result + (subGradeId ?: 0)
-        result = 31 * result + (programId ?: 0)
-        result = 31 * result + (roleId ?: 0)
-        result = 31 * result + className.hashCode()
-        result = 31 * result + subClass.hashCode()
-        result = 31 * result + grade.hashCode()
-        result = 31 * result + subGrade.hashCode()
-        result = 31 * result + program.hashCode()
-        result = 31 * result + role.hashCode()
-        result = 31 * result + timestamp.hashCode()
         return result
     }
 }

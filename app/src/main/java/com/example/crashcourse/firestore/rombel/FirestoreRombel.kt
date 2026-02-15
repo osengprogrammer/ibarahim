@@ -9,9 +9,9 @@ import com.google.firebase.firestore.SetOptions
 import kotlinx.coroutines.tasks.await
 
 /**
- * 🏗️ FirestoreRombel
- * Database layer untuk sinkronisasi Unit Rakitan (Rombel) ke Cloud.
- * Menggunakan Composite ID (sekolahId_classId) untuk isolasi data yang sempurna.
+ * 🏗️ FirestoreRombel (V.10.13 - Refactored)
+ * Database layer untuk sinkronisasi Unit/Rombel ke Cloud.
+ * Menggunakan Composite ID (schoolId_classId) untuk isolasi data Multi-Tenant.
  */
 object FirestoreRombel {
 
@@ -21,25 +21,28 @@ object FirestoreRombel {
     // ==========================================
     // 1️⃣ FETCH (Download Data Master Sekolah)
     // ==========================================
+    
     /**
      * Mengambil semua daftar Rombel milik sekolah tertentu.
      */
-    suspend fun fetchMasterClasses(sekolahId: String): List<MasterClassRoom> {
+    suspend fun fetchMasterClasses(schoolId: String): List<MasterClassRoom> {
         return try {
+            if (schoolId.isBlank()) return emptyList()
+
             val snapshot = db.collection(FirestorePaths.MASTER_CLASSES)
-                .whereEqualTo(Constants.KEY_SEKOLAH_ID, sekolahId)
+                .whereEqualTo("schoolId", schoolId) // ✅ Ganti dari sekolahId
                 .get()
                 .await()
 
-            Log.d(TAG, "📥 Fetching Rombel for $sekolahId: ${snapshot.size()} items found.")
+            Log.d(TAG, "📥 Fetching Rombel for $schoolId: ${snapshot.size()} items found.")
 
             snapshot.documents.mapNotNull { doc ->
                 try {
-                    // Safe parsing untuk menghindari crash jika tipe data di Firestore bergeser
+                    // Mapping dari Firestore Document ke Room Entity
                     MasterClassRoom(
-                        classId = doc.getLong(Constants.KEY_ID)?.toInt() ?: 0,
-                        sekolahId = doc.getString(Constants.KEY_SEKOLAH_ID) ?: sekolahId,
-                        className = doc.getString(Constants.PILLAR_CLASS) ?: "Unit Tanpa Nama",
+                        classId = doc.getLong("classId")?.toInt() ?: 0,
+                        schoolId = doc.getString("schoolId") ?: schoolId, // ✅ Consistent naming
+                        className = doc.getString("className") ?: "Unit Tanpa Nama",
                         gradeId = doc.getLong("gradeId")?.toInt() ?: 0,
                         classOptionId = doc.getLong("classOptionId")?.toInt() ?: 0,
                         programId = doc.getLong("programId")?.toInt() ?: 0,
@@ -61,25 +64,27 @@ object FirestoreRombel {
     // ==========================================
     // 2️⃣ SAVE (Upsert dengan Composite ID)
     // ==========================================
+    
     /**
      * Menyimpan atau memperbarui Unit Rakitan ke Cloud.
      */
     suspend fun saveMasterClass(data: MasterClassRoom) {
         try {
             // 🚀 COMPOSITE ID: Mencegah tabrakan ID '1' antara Sekolah A dan Sekolah B
-            val docId = "${data.sekolahId}_${data.classId}"
+            // Menggunakan data.schoolId (Pastikan property di MasterClassRoom sudah di-rename)
+            val docId = "${data.schoolId}_${data.classId}"
 
             val firestoreData = hashMapOf(
-                Constants.KEY_ID to data.classId,
-                Constants.KEY_SEKOLAH_ID to data.sekolahId,
-                Constants.PILLAR_CLASS to data.className,
+                "classId" to data.classId,
+                "schoolId" to data.schoolId, // ✅ Sync dengan Entity
+                "className" to data.className,
                 "gradeId" to data.gradeId,
                 "classOptionId" to data.classOptionId,
                 "programId" to data.programId,
                 "subClassId" to data.subClassId,
                 "subGradeId" to data.subGradeId,
                 "roleId" to data.roleId,
-                "updatedAt" to System.currentTimeMillis() // Penting untuk tracking perubahan
+                "updatedAt" to System.currentTimeMillis()
             )
 
             db.collection(FirestorePaths.MASTER_CLASSES)
@@ -87,7 +92,7 @@ object FirestoreRombel {
                 .set(firestoreData, SetOptions.merge())
                 .await()
 
-            Log.d(TAG, "✅ Rombel Synced: $docId ($${data.className})")
+            Log.d(TAG, "✅ Rombel Synced: $docId (${data.className})")
         } catch (e: Exception) {
             Log.e(TAG, "❌ saveMasterClass failed", e)
             throw e
@@ -97,12 +102,13 @@ object FirestoreRombel {
     // ==========================================
     // 3️⃣ DELETE (Cleanup Cloud Data)
     // ==========================================
+    
     /**
      * Menghapus Unit Rakitan dari Cloud berdasarkan Composite ID.
      */
-    suspend fun deleteMasterClass(sekolahId: String, classId: Int) {
+    suspend fun deleteMasterClass(schoolId: String, classId: Int) {
         try {
-            val docId = "${sekolahId}_${classId}"
+            val docId = "${schoolId}_${classId}"
             
             db.collection(FirestorePaths.MASTER_CLASSES)
                 .document(docId)

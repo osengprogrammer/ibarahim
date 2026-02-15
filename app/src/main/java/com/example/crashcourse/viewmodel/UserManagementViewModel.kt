@@ -5,19 +5,17 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.crashcourse.firestore.user.FirestoreUser
+import com.example.crashcourse.firestore.user.UserProfile
 import com.example.crashcourse.repository.UserRepository
 import com.example.crashcourse.ui.management.SaveState     
 import com.example.crashcourse.ui.management.UserListState 
-import com.google.firebase.Timestamp
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import java.util.Calendar
-import java.util.HashMap
 
 /**
- * 👨‍💼 UserManagementViewModel (V.6.0 - Anti-Stuck & Migration Ready)
- * Mengelola daftar staff, undangan, dan pembaruan scope kelas.
+ * 👨‍💼 UserManagementViewModel (V.10.21 - Unified Identity Refactor)
+ * Mengelola otorisasi staff menggunakan satu jalur schoolId yang sudah dibersihkan.
  */
 class UserManagementViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -34,22 +32,20 @@ class UserManagementViewModel(application: Application) : AndroidViewModel(appli
     }
 
     /**
-     * 📥 FETCH USERS
-     * Mengambil daftar staff sekolah dari Firestore.
+     * Menarik daftar staff berdasarkan identitas sekolah tunggal (schoolId).
      */
     fun fetchUsers() {
         viewModelScope.launch {
             _uiState.value = UserListState.Loading
             try {
                 val currentAdmin = userRepo.getCurrentUser() 
-                
                 if (currentAdmin == null) {
                     _uiState.value = UserListState.Error("Sesi Admin tidak ditemukan.")
                     return@launch
                 }
 
-                val mySekolahId = currentAdmin.sekolahId ?: ""
-                val userList = FirestoreUser.fetchUsersBySchool(mySekolahId)
+                // 🔥 FIXED: Menggunakan schoolId, bukan schoolId
+                val userList = FirestoreUser.fetchUsersBySchool(currentAdmin.schoolId)
                 
                 if (userList.isEmpty()) {
                     _uiState.value = UserListState.Error("Belum ada staff terdaftar.")
@@ -58,69 +54,67 @@ class UserManagementViewModel(application: Application) : AndroidViewModel(appli
                 }
             } catch (e: Exception) {
                 Log.e("UserVM", "Fetch Error", e)
-                _uiState.value = UserListState.Error("Gagal mengambil data.")
+                _uiState.value = UserListState.Error("Gagal mengambil data staff.")
             }
         }
     }
 
     /**
-     * 🚀 INVITE STAFF (Updated for Migration Strategy)
-     * Membuat dokumen awal dengan ID Email sebagai "umpan" migrasi ke UID.
+     * 🚀 INVITE STAFF
+     * Menempelkan ID sekolah Admin ke profil staff baru.
      */
     fun inviteStaff(email: String, role: String) {
         viewModelScope.launch {
             try {
                 val currentAdmin = userRepo.getCurrentUser() ?: return@launch
-
-                // 🔥 Normalisasi email agar Document ID konsisten (lowercase)
                 val normalizedEmail = email.lowercase().trim()
-                val inheritedSekolahId = currentAdmin.sekolahId ?: ""
-                val inheritedSchoolName = currentAdmin.name ?: ""
 
-                val calendar = Calendar.getInstance().apply { add(Calendar.YEAR, 1) }
+                // 🔥 FIXED: Penyelarasan dengan UserProfile baru
+                val newUserInvite = UserProfile(
+                    uid = "", 
+                    email = normalizedEmail,
+                    role = role,
+                    // 🔥 Kita pakai schoolId sekarang
+                    schoolId = currentAdmin.schoolId,
+                    schoolName = currentAdmin.name,
+                    isActive = false, // Status awal PENDING
+                    assigned_classes = emptyList()
+                )
 
-                val inviteData = HashMap<String, Any>().apply {
-                    put("email", normalizedEmail)
-                    put("role", role)
-                    put("sekolahId", inheritedSekolahId)
-                    put("school_name", inheritedSchoolName)
-                    put("status", "ACTIVE") // 🔥 Set ACTIVE agar tidak stuck di 'Status Waiting'
-                    put("isRegistered", false)
-                    put("uid", "") // Akan diisi otomatis oleh AuthViewModel saat login/migrasi
-                    put("device_id", "")
-                    put("assigned_classes", emptyList<String>())
-                    put("expiry_date", Timestamp(calendar.time))
-                    put("created_at", System.currentTimeMillis())
-                }
-
-                // Simpan dokumen dengan ID = Email
-                FirestoreUser.inviteStaffByMap(normalizedEmail, inviteData)
-                
-                Log.d("UserVM", "✅ Berhasil invite: $normalizedEmail. Menunggu migrasi saat login.")
+                FirestoreUser.inviteStaff(newUserInvite)
                 fetchUsers() 
-
             } catch (e: Exception) {
-                Log.e("UserVM", "❌ Gagal invite: ${e.message}")
+                Log.e("UserVM", "❌ Invite Error: ${e.message}")
             }
         }
     }
 
     /**
      * 💾 SAVE USER SCOPE
-     * Memperbarui daftar kelas. docId bisa berupa Email (sebelum migrasi) atau UID (setelah migrasi).
      */
     fun saveUserScope(docId: String, classes: List<String>) {
         viewModelScope.launch {
             _saveState.value = SaveState.Loading
             try {
+                // 1. Update Firestore
                 FirestoreUser.updateUserScope(docId, classes)
+
+                // 2. ⚡ SYNC KE ROOM (Opsional)
+                // Jika Admin mengedit dirinya sendiri, kita simpan status sinkronisasi terakhir
+                val currentAdmin = userRepo.getCurrentUser()
+                if (currentAdmin != null && docId == currentAdmin.uid) {
+                    // Update timestamp sync terakhir
+                    userRepo.getCurrentUser()?.uid?.let { 
+                        // Catatan: updateClasses ditiadakan di Dao baru demi efisiensi RAM
+                        // Data akan ter-sync otomatis saat login berikutnya atau via Flow
+                    }
+                }
+
                 _saveState.value = SaveState.Success
-                
-                // Refresh data lokal agar perubahan langsung terlihat di UI
                 fetchUsers() 
             } catch (e: Exception) {
-                Log.e("UserVM", "Gagal simpan scope", e)
-                _saveState.value = SaveState.Error(e.message ?: "Gagal menyimpan perubahan.")
+                Log.e("UserVM", "Save Error", e)
+                _saveState.value = SaveState.Error(e.message ?: "Gagal memperbarui akses.")
             }
         }
     }

@@ -4,51 +4,49 @@ import android.content.Context
 import android.util.Log
 import org.tensorflow.lite.Interpreter
 import com.example.crashcourse.utils.ModelUtils
+import com.example.crashcourse.ml.nativeutils.NativeMath // ✅ Import pusat matematika kita
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import kotlin.math.sqrt
 
+/**
+ * 🧠 Azura Tech Face Recognizer
+ * Tugas: Melakukan inference menggunakan MobileFaceNet TFLite.
+ * Arsitektur: Delegasi Normalisasi ke NativeMath untuk akurasi Stainless Steel.
+ */
 object FaceRecognizer {
     private const val TAG = "FaceRecognizer"
-    
-    // ✅ Updated to match your new model file name
     private const val MODEL_NAME = "mobilefacenet.tflite"
     
-    // ✅ Updated to match your metadata: float32[1,192]
     private var embeddingSize = 192 
-
     private lateinit var interpreter: Interpreter
     private lateinit var outputBuffer: Array<FloatArray>
 
     /**
-     * Initialize the TFLite interpreter with the new 5MB MobileFaceNet model.
+     * Inisialisasi Interpreter dengan model MobileFaceNet 5MB.
      */
     fun initialize(context: Context) {
         try {
             Log.d(TAG, "Initializing FaceRecognizer with model: $MODEL_NAME")
             val modelBuffer = ModelUtils.loadModelFile(context, MODEL_NAME)
             
-            // Optimization: 4 threads is usually the sweet spot for mobile CPUs
+            // Setel 4 threads: Performa puncak untuk kebanyakan CPU Mobile
             val options = Interpreter.Options().apply { 
                 setNumThreads(4) 
-                // You could also add NNAPI here if you want hardware acceleration
             }
             
             interpreter = Interpreter(modelBuffer, options)
             interpreter.allocateTensors()
 
-            // 1. DYNAMIC SIZE DETECTION (Safety Check)
+            // Deteksi ukuran output secara dinamis
             val outputTensor = interpreter.getOutputTensor(0)
-            val shape = outputTensor.shape() // Expected: [1, 192]
+            val shape = outputTensor.shape() 
             
             if (shape.size >= 2) {
                 embeddingSize = shape[1]
                 Log.i(TAG, "Detected Model Output Size: $embeddingSize")
-            } else {
-                Log.w(TAG, "Could not detect shape accurately, defaulting to $embeddingSize")
             }
 
-            // 2. Pre-allocate buffer to prevent GC pressure during camera stream
+            // Pre-allocate buffer untuk efisiensi memori (Anti-Lag)
             outputBuffer = Array(1) { FloatArray(embeddingSize) }
 
         } catch (e: Exception) {
@@ -57,7 +55,7 @@ object FaceRecognizer {
     }
 
     /**
-     * Generates a 192-dimension embedding from the preprocessed ByteBuffer.
+     * Menghasilkan embedding wajah dari ByteBuffer hasil preprocess.
      */
     fun recognizeFace(input: ByteBuffer): FloatArray {
         if (!::interpreter.isInitialized) {
@@ -66,30 +64,17 @@ object FaceRecognizer {
         }
 
         return try {
-            // Ensure the input buffer is at the start
             input.rewind()
             
-            // Run inference
+            // 1. Jalankan AI Inference
             interpreter.run(input, outputBuffer)
             
-            // Get the result
+            // 2. Ambil data mentah (Raw Embedding)
             val rawEmbedding = outputBuffer[0]
 
-            // 3. L2 NORMALIZATION (Crucial for MobileFaceNet accuracy)
-            // This ensures all vectors have a magnitude of 1.0
-            var sum = 0.0f
-            for (v in rawEmbedding) { 
-                sum += v * v 
-            }
-            val norm = sqrt(sum.toDouble()).toFloat()
-            val safeNorm = if (norm > 0.00001f) norm else 1.0f
-
-            val normalizedEmbedding = FloatArray(embeddingSize)
-            for (i in rawEmbedding.indices) {
-                normalizedEmbedding[i] = rawEmbedding[i] / safeNorm
-            }
-
-            normalizedEmbedding
+            // 3. 🛡️ L2 NORMALIZATION (Delegasikan ke NativeMath)
+            // Menggunakan fungsi eksternal agar standar pendaftaran & check-in identik 100%
+            NativeMath.normalize(rawEmbedding.clone()) 
 
         } catch (e: Exception) {
             Log.e(TAG, "Error during face recognition inference", e)
@@ -98,7 +83,7 @@ object FaceRecognizer {
     }
 
     /**
-     * Call this when the app or activity is destroyed to free up memory.
+     * Membersihkan memori saat aplikasi ditutup.
      */
     fun close() {
         try {

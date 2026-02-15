@@ -3,53 +3,62 @@ package com.example.crashcourse.db
 import androidx.room.TypeConverter
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.time.LocalDateTime
-import java.time.format.DateTimeFormatter
 
 /**
- * 🔄 Azura Tech Type Converters
- * Bertugas mengubah tipe data kompleks menjadi format yang dipahami SQLite (String/Long).
+ * 🧪 Converters V.16.0 - Precision Edition
+ * Mengganti JSON String dengan ByteArray (BLOB) untuk menjaga integritas vektor biometrik.
  */
 class Converters {
-    private val formatter = DateTimeFormatter.ISO_LOCAL_DATE_TIME
+
     private val gson = Gson()
 
-    // --- 🕒 LocalDateTime Converters (Untuk Log Absensi) ---
-    // Mengubah String dari DB kembali menjadi objek waktu Kotlin
+    // --- 📅 LOCAL DATETIME ---
     @TypeConverter
-    fun fromTimestamp(value: String?): LocalDateTime? {
-        return value?.let { LocalDateTime.parse(it, formatter) }
-    }
-
-    // Mengubah objek waktu Kotlin menjadi String agar bisa disimpan di DB
-    @TypeConverter
-    fun dateToTimestamp(date: LocalDateTime?): String? {
-        return date?.format(formatter)
-    }
-
-    // --- 🧬 FloatArray Converters (Untuk Biometric Embedding 128-d) ---
-    // Sangat krusial agar data wajah AI bisa disimpan dalam satu kolom
-    @TypeConverter
-    fun fromFloatArray(value: FloatArray?): String? {
-        return gson.toJson(value)
+    fun toLocalDateTime(value: String?): LocalDateTime? {
+        return value?.let { LocalDateTime.parse(it) }
     }
 
     @TypeConverter
-    fun toFloatArray(value: String?): FloatArray? {
-        val type = object : TypeToken<FloatArray>() {}.type
-        return gson.fromJson(value, type)
+    fun fromLocalDateTime(date: LocalDateTime?): String? {
+        return date?.toString()
     }
 
-    // --- 📦 List<String> Converters (Untuk Assigned Classes / Hak Akses) ---
-    // Digunakan pada UserEntity untuk menyimpan daftar kelas yang boleh diakses Admin
+    // --- 🧬 FLOAT ARRAY (BIOMETRIC VECTOR) ---
+    // ✅ Menggunakan ByteBuffer agar presisi desimal terjaga 100%
     @TypeConverter
-    fun fromStringList(value: List<String>?): String? {
-        return gson.toJson(value)
+    fun fromFloatArray(bytes: ByteArray?): FloatArray? {
+        if (bytes == null) return null
+        val buffer = ByteBuffer.wrap(bytes).order(ByteOrder.nativeOrder())
+        val array = FloatArray(bytes.size / 4) // 1 Float = 4 Bytes
+        for (i in array.indices) {
+            array[i] = buffer.float
+        }
+        return array
     }
 
     @TypeConverter
-    fun toStringList(value: String?): List<String>? {
-        val type = object : TypeToken<List<String>>() {}.type
-        return gson.fromJson(value, type)
+    fun toFloatArray(array: FloatArray?): ByteArray? {
+        if (array == null) return null
+        val buffer = ByteBuffer.allocate(array.size * 4).order(ByteOrder.nativeOrder())
+        for (value in array) {
+            buffer.putFloat(value)
+        }
+        return buffer.array()
+    }
+
+    // --- 📝 LIST STRING ---
+    @TypeConverter
+    fun fromStringList(value: String?): List<String> {
+        if (value == null) return emptyList()
+        val listType = object : TypeToken<List<String>>() {}.type
+        return gson.fromJson(value, listType)
+    }
+
+    @TypeConverter
+    fun toStringList(list: List<String>?): String {
+        return gson.toJson(list ?: emptyList<String>())
     }
 }

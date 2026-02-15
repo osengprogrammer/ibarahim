@@ -6,186 +6,172 @@ import com.example.crashcourse.firestore.core.FirestorePaths
 import com.example.crashcourse.firestore.core.FirestoreCore
 import com.example.crashcourse.utils.Constants
 import com.google.firebase.firestore.Query
+import com.google.firebase.firestore.SetOptions
 import kotlinx.coroutines.tasks.await
 
 /**
- * 👥 FirestoreStudent (MANY-TO-MANY SUPPORTED)
- * Source of truth untuk operasi data Siswa di Firestore.
+ * 👥 FirestoreStudent (V.10.25 - Final Guarded Identity)
+ * Authority utama data siswa Azura Attendance.
+ * Memastikan schoolId adalah identitas mutlak yang tidak boleh kosong.
  */
 object FirestoreStudent {
 
     private const val TAG = "FirestoreStudent"
     private val db = FirestoreCore.db
 
+    // ==========================================
+    // 🔍 1. READ OPERATIONS (Sync)
+    // ==========================================
+
     /**
      * 🔄 SMART SYNC STUDENTS
-     * Menarik data dari Firestore dengan filter keamanan Many-to-Many.
+     * Menarik data biometrik secara Global (Open Set) untuk satu sekolah.
      */
     suspend fun fetchSmartSyncStudents(
-        sekolahId: String,
+        schoolId: String,
         assignedClasses: List<String>,
         role: String,
         lastSync: Long
     ): List<FaceEntity> {
         return try {
-            if (sekolahId.isBlank()) return emptyList()
+            if (schoolId.isBlank()) {
+                Log.e(TAG, "⚠️ Sync aborted: schoolId parameter is blank!")
+                return emptyList()
+            }
 
-            // 1. Base Query: Harus sesuai Sekolah ID
+            // 1. Base Query: Isolasi data berdasarkan Sekolah (Multi-Tenant)
             var query: Query = db.collection(FirestorePaths.STUDENTS)
-                .whereEqualTo(Constants.KEY_SEKOLAH_ID, sekolahId)
+                .whereEqualTo("schoolId", schoolId)
 
-            // 2. Filter Security Many-to-Many
-            // Jika bukan ADMIN, filter hanya rombel yang diampu (assignedClasses)
-            if (role != Constants.ROLE_ADMIN) {
-                if (assignedClasses.isNotEmpty()) {
-                    // Hanya tarik siswa yang Rombel-nya ada di daftar assignedClasses Guru
-                    query = query.whereArrayContainsAny(Constants.PILLAR_CLASS, assignedClasses)
-                } else {
-                    // 🚩 PERINGATAN: Jika Guru tidak punya kelas, jangan tarik data (Security)
-                    Log.w(TAG, "⚠️ Guru/User tidak memiliki assignedClasses. Sync dibatalkan.")
-                    return emptyList()
-                }
-            }
-            
-            // 3. Filter Incremental (Hanya ambil yang terbaru sejak sync terakhir)
+            // 2. Incremental Filter: Hanya ambil data yang berubah sejak sync terakhir
             if (lastSync > 0) {
-                query = query.whereGreaterThan(Constants.KEY_TIMESTAMP, lastSync)
+                query = query.whereGreaterThan("timestamp", lastSync)
             }
 
-            Log.d(TAG, "📡 Fetching students for school: $sekolahId with classes: $assignedClasses")
+            Log.d(TAG, "📡 Syncing Cloud -> Local untuk School ID: $schoolId")
 
             val snapshot = query.get().await()
             val list = snapshot.documents.mapNotNull { doc ->
-                mapStudentDocument(doc.data, sekolahId)
+                // Mengirim schoolId sebagai fallback jika data di cloud corrupt
+                mapStudentDocument(doc.data, schoolId)
             }
-            
-            Log.d(TAG, "✅ Berhasil menarik ${list.size} siswa dari Cloud")
+
+            Log.d(TAG, "✅ Berhasil menarik ${list.size} siswa dari Firestore.")
             list
 
         } catch (e: Exception) {
-            Log.e(TAG, "❌ fetchSmartSyncStudents failed: ${e.message}", e)
+            Log.e(TAG, "❌ fetchSmartSyncStudents failed: ${e.message}")
             emptyList()
         }
     }
+
+    // ==========================================
+    // ✍️ 2. WRITE / DELETE OPERATIONS
+    // ==========================================
 
     /**
-     * 🎯 DOWNLOAD STUDENTS BY ONE ROMBEL
+     * 🔥 UPLOAD STUDENT (Guarded Version)
+     * Memastikan data biometrik dan identitas sekolah terstempel dengan benar.
      */
-    suspend fun fetchStudentsByRombel(
-        sekolahId: String,
-        className: String
-    ): List<FaceEntity> {
-        return try {
-            db.collection(FirestorePaths.STUDENTS)
-                .whereEqualTo(Constants.KEY_SEKOLAH_ID, sekolahId)
-                .whereArrayContains(Constants.PILLAR_CLASS, className)
-                .get()
-                .await()
-                .documents
-                .mapNotNull { doc ->
-                    mapStudentDocument(doc.data, sekolahId)
-                }
-        } catch (e: Exception) {
-            Log.e(TAG, "❌ fetchStudentsByRombel failed", e)
-            emptyList()
-        }
-    }
-
-    // ==========================================
-    // WRITE / DELETE
-    // ==========================================
-
     suspend fun uploadStudent(face: FaceEntity) {
         try {
-            // Konversi String CSV (Room) ke Array (Firestore)
-            val classList = face.className.split(",")
-                .map { it.trim() }
-                .filter { it.isNotEmpty() }
+            // Validasi Keras: Jangan biarkan data tanpa schoolId naik ke Cloud
+            if (face.schoolId.isBlank()) {
+                throw IllegalArgumentException("CRITICAL: Mencoba upload siswa tanpa schoolId!")
+            }
 
-            val data = mapOf(
-                Constants.FIELD_STUDENT_ID to face.studentId,
-                Constants.KEY_SEKOLAH_ID to face.sekolahId,
-                Constants.KEY_NAME to face.name,
-                Constants.FIELD_EMBEDDING to face.embedding.map { it.toDouble() },
-                Constants.KEY_TIMESTAMP to System.currentTimeMillis(),
-                Constants.FIELD_PHOTO_URL to face.photoUrl,
-                Constants.PILLAR_CLASS to classList, // Disimpan sebagai Array
-                Constants.FIELD_ROLE to face.role,
-                Constants.PILLAR_GRADE to face.grade,
-                Constants.PILLAR_SUB_GRADE to face.subGrade,
-                Constants.PILLAR_PROGRAM to face.program,
-                Constants.PILLAR_SUB_CLASS to face.subClass
+            // Konversi FloatArray ke List<Double> (Firestore Standard)
+            val embeddingList = face.embedding.map { it.toDouble() }
+
+            val data = hashMapOf(
+                "studentId" to face.studentId,
+                "schoolId" to face.schoolId, // Identitas Sekolah
+                "name" to face.name,
+                "embedding" to embeddingList,
+                "enrolledClasses" to face.enrolledClasses,
+                "photoUrl" to face.photoUrl,
+                "grade" to face.grade,
+                "subClass" to face.subClass,
+                "timestamp" to System.currentTimeMillis()
             )
 
             db.collection(FirestorePaths.STUDENTS)
                 .document(face.studentId)
-                .set(data)
+                .set(data, SetOptions.merge())
                 .await()
-                
-            Log.d(TAG, "✅ Student ${face.name} uploaded successfully")
+
+            Log.d(TAG, "✅ Student ${face.name} berhasil di-upload dengan ID Sekolah: ${face.schoolId}")
         } catch (e: Exception) {
-            Log.e(TAG, "❌ uploadStudent failed", e)
+            Log.e(TAG, "❌ Gagal uploadStudent: ${e.message}")
             throw e
         }
     }
 
-    suspend fun updateFaceWithPhoto(face: FaceEntity) {
-        uploadStudent(face)
-    }
-
+    /**
+     * 🗑️ DELETE STUDENT
+     */
     suspend fun deleteStudent(studentId: String) {
         try {
             db.collection(FirestorePaths.STUDENTS)
                 .document(studentId)
                 .delete()
                 .await()
+            Log.d(TAG, "🗑️ Document $studentId dihapus dari Cloud.")
         } catch (e: Exception) {
-            Log.e(TAG, "❌ deleteStudent failed", e)
+            Log.e(TAG, "❌ Gagal deleteStudent: ${e.message}")
             throw e
         }
     }
 
     // ==========================================
-    // PRIVATE HELPERS
+    // 🛠️ 3. PRIVATE HELPERS (Mapping Logic)
     // ==========================================
 
+    /**
+     * Mengubah data Map mentah dari Firestore menjadi objek FaceEntity.
+     */
     private fun mapStudentDocument(
         data: Map<String, Any>?,
-        sekolahIdFallback: String
+        schoolIdFallback: String
     ): FaceEntity? {
         return try {
             if (data == null) return null
 
-            // Mapping embedding (Double dari Firestore -> FloatArray untuk AI)
-            val embedding = (data[Constants.FIELD_EMBEDDING] as? List<*>)
-                ?.mapNotNull { (it as? Number)?.toFloat() }
-                ?.toFloatArray()
-                ?: return null
+            // 📐 Konversi Embedding: Double List (Cloud) -> FloatArray (AI Engine)
+            val rawEmbedding = data["embedding"] as? List<*>
+            val embedding = rawEmbedding?.mapNotNull { (it as? Number)?.toFloat() }?.toFloatArray()
 
-            // Konversi Array (Firestore) ke String CSV (Room)
-            val rawClass = data[Constants.PILLAR_CLASS]
-            val classNameString = when (rawClass) {
-                is List<*> -> rawClass.joinToString(", ")
-                else -> rawClass?.toString() ?: ""
+            if (embedding == null || embedding.isEmpty()) {
+                Log.w(TAG, "⚠️ Data biometrik rusak untuk student: ${data["name"]}")
+                return null
+            }
+
+            // 📚 Konversi Array: Firestore List -> Kotlin List<String>
+            val enrolledClasses = (data["enrolledClasses"] as? List<*>)
+                ?.mapNotNull { it?.toString() }
+                ?: emptyList()
+
+            // 🔥 LOGIKA PENYELAMAT: Ambil schoolId dari cloud, jika null pakai fallback dari session.
+            val finalSchoolId = data["schoolId"]?.toString() ?: schoolIdFallback
+
+            if (finalSchoolId.isBlank()) {
+                Log.e(TAG, "❌ Mapping Error: schoolId tidak ditemukan bahkan di fallback!")
+                return null
             }
 
             FaceEntity(
-                studentId = data[Constants.FIELD_STUDENT_ID]?.toString() ?: "",
-                sekolahId = data[Constants.KEY_SEKOLAH_ID]?.toString() ?: sekolahIdFallback,
-                name = data[Constants.KEY_NAME]?.toString() ?: "Unknown",
-                photoUrl = data[Constants.FIELD_PHOTO_URL]?.toString(),
+                studentId = data["studentId"]?.toString() ?: "",
+                schoolId = finalSchoolId,
+                name = data["name"]?.toString() ?: "Unknown Student",
                 embedding = embedding,
-                className = classNameString,
-                role = data[Constants.FIELD_ROLE]?.toString() ?: Constants.ROLE_USER,
-                grade = data[Constants.PILLAR_GRADE]?.toString() ?: "",
-                subGrade = data[Constants.PILLAR_SUB_GRADE]?.toString() ?: "",
-                program = data[Constants.PILLAR_PROGRAM]?.toString() ?: "",
-                subClass = data[Constants.PILLAR_SUB_CLASS]?.toString() ?: "",
-                timestamp = (data[Constants.KEY_TIMESTAMP] as? Number)?.toLong()
-                    ?: System.currentTimeMillis()
+                enrolledClasses = enrolledClasses,
+                photoUrl = data["photoUrl"]?.toString(),
+                grade = data["grade"]?.toString() ?: "",
+                subClass = data["subClass"]?.toString() ?: "",
+                timestamp = (data["timestamp"] as? Number)?.toLong() ?: System.currentTimeMillis()
             )
         } catch (e: Exception) {
-            Log.e(TAG, "❌ mapStudentDocument error", e)
+            Log.e(TAG, "❌ Mapping Error: ${e.message}")
             null
         }
     }

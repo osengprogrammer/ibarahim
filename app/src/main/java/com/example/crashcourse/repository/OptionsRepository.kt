@@ -9,11 +9,17 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
 
+/**
+ * 🛠️ OptionsRepository (Optimized for Instant UI)
+ * Mengelola data Master (Pilar 6) antara Room Database dan Firestore.
+ */
 class OptionsRepository(application: Application) {
     private val db = AppDatabase.getInstance(application)
     private val prefs = application.getSharedPreferences("azura_sync_prefs", Context.MODE_PRIVATE)
 
-    // --- 📊 Get All Flows ---
+    // ==========================================
+    // 1. 🌊 DATA FLOWS (REAL-TIME LOCAL)
+    // ==========================================
     fun getGradeOptions(): Flow<List<GradeOption>> = db.gradeOptionDao().getAll()
     fun getProgramOptions(): Flow<List<ProgramOption>> = db.programOptionDao().getAll()
     fun getSubClassOptions(): Flow<List<SubClassOption>> = db.subClassOptionDao().getAll()
@@ -21,8 +27,54 @@ class OptionsRepository(application: Application) {
     fun getSubGradeOptions(): Flow<List<SubGradeOption>> = db.subGradeOptionDao().getAll()
     fun getRoleOptions(): Flow<List<RoleOption>> = db.roleOptionDao().getAll()
 
+    // ==========================================
+    // 2. 📥 WRITE OPERATIONS (LOCAL FIRST)
+    // ==========================================
+
     /**
-     * 🔥 INCREMENTAL SYNC LOGIC
+     * 🚀 INSERT LOCALLY
+     * Digunakan oleh ViewModel untuk memberikan feedback instan di UI.
+     */
+    suspend fun insertLocally(option: Any) = withContext(Dispatchers.IO) {
+        when (option) {
+            is ClassOption -> db.classOptionDao().insert(option)
+            is SubClassOption -> db.subClassOptionDao().insert(option)
+            is GradeOption -> db.gradeOptionDao().insert(option)
+            is SubGradeOption -> db.subGradeOptionDao().insert(option)
+            is ProgramOption -> db.programOptionDao().insert(option)
+            is RoleOption -> db.roleOptionDao().insert(option)
+        }
+    }
+
+    /**
+     * 🗑️ DELETE LOCALLY
+     */
+    suspend fun deleteOptionLocally(option: Any) = withContext(Dispatchers.IO) {
+        when (option) {
+            is ClassOption -> db.classOptionDao().delete(option)
+            is SubClassOption -> db.subClassOptionDao().delete(option)
+            is GradeOption -> db.gradeOptionDao().delete(option)
+            is SubGradeOption -> db.subGradeOptionDao().delete(option)
+            is ProgramOption -> db.programOptionDao().delete(option)
+            is RoleOption -> db.roleOptionDao().delete(option)
+        }
+    }
+
+    // ==========================================
+    // 3. ☁️ CLOUD SYNC OPERATIONS
+    // ==========================================
+
+    /**
+     * 🚀 SAVE TO CLOUD
+     * Mengirim data ke Firestore.
+     */
+    suspend fun saveOptionToCloud(collectionName: String, id: Int, data: Map<String, Any>) = withContext(Dispatchers.IO) {
+        FirestoreOptions.saveOption(collectionName, id, data)
+    }
+
+    /**
+     * 🔥 INCREMENTAL SYNC
+     * Menarik data terbaru dari Firestore sejak sinkronisasi terakhir.
      */
     suspend fun syncAllFromCloud() = withContext(Dispatchers.IO) {
         val lastSync = prefs.getLong("last_options_sync", 0L)
@@ -39,7 +91,7 @@ class OptionsRepository(application: Application) {
     }
 
     /**
-     * 📥 PROCESS & SAVE (Mapping logic moved here)
+     * 📥 PROCESS & SAVE (Mapping logic)
      */
     suspend fun processAndSave(type: String, dataList: List<Map<String, Any>>) = withContext(Dispatchers.IO) {
         when (type) {
@@ -64,16 +116,9 @@ class OptionsRepository(application: Application) {
         }
     }
 
-    suspend fun deleteOptionLocally(option: Any) = withContext(Dispatchers.IO) {
-        when (option) {
-            is ClassOption -> db.classOptionDao().delete(option)
-            is SubClassOption -> db.subClassOptionDao().delete(option)
-            is GradeOption -> db.gradeOptionDao().delete(option)
-            is SubGradeOption -> db.subGradeOptionDao().delete(option)
-            is ProgramOption -> db.programOptionDao().delete(option)
-            is RoleOption -> db.roleOptionDao().delete(option)
-        }
-    }
+    // ==========================================
+    // 4. 🛠️ HELPERS
+    // ==========================================
 
     fun getCollectionName(type: String): String = when(type) {
         "Class" -> Constants.COLL_OPT_CLASSES
@@ -84,17 +129,4 @@ class OptionsRepository(application: Application) {
         "Role" -> Constants.COLL_OPT_ROLES
         else -> "others"
     }
-
-
-
-    // Di dalam OptionsRepository.kt
-
-/**
- * 🚀 SAVE/UPDATE OPTION
- * Menyimpan data ke Firestore. Karena kita pakai Listener, 
- * data akan otomatis masuk ke Room saat Firestore berhasil disimpan.
- */
-suspend fun saveOptionToCloud(collectionName: String, id: Int, data: Map<String, Any>) = withContext(Dispatchers.IO) {
-    FirestoreOptions.saveOption(collectionName, id, data)
-}
 }

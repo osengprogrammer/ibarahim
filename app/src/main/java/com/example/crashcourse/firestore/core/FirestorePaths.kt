@@ -1,17 +1,27 @@
 package com.example.crashcourse.firestore.core
 
-import com.example.crashcourse.utils.Constants
-
+/**
+ * 🛣️ FirestorePaths
+ * Menyimpan nama-nama koleksi Firestore.
+ * Diupdate untuk mendukung 'MASTER_CLASSES' sesuai kode Rombel & UserScope.
+ */
 object FirestorePaths {
-    const val USERS = Constants.COLL_USERS
-    const val STUDENTS = Constants.COLL_STUDENTS
-    const val ATTENDANCE = Constants.COLL_ATTENDANCE
-    const val MASTER_CLASSES = Constants.COLL_MASTER_CLASSES
+    
+    // --- Root Collections ---
+    const val USERS = "users"
+    const val SCHOOLS = "schools"
 
-    const val OPT_CLASSES = Constants.COLL_OPT_CLASSES
-    const val OPT_SUBCLASSES = Constants.COLL_OPT_SUBCLASSES
-    const val OPT_GRADES = Constants.COLL_OPT_GRADES
-    const val OPT_SUBGRADES = Constants.COLL_OPT_SUBGRADES
-    const val OPT_PROGRAMS = Constants.COLL_OPT_PROGRAMS
-    const val OPT_ROLES = Constants.COLL_OPT_ROLES
+    // --- Sub Collections (Inside Schools) ---
+    const val STUDENTS = "students"
+    
+    // 🔥 FIXED: Menggunakan nama MASTER_CLASSES agar sesuai dengan FirestoreRombel.kt
+    const val MASTER_CLASSES = "classes"       
+    
+    // 🔥 ANTISIPASI: Kemungkinan besar kode Anda juga butuh ini
+    const val MASTER_SUBJECTS = "subjects"
+    
+    const val ATTENDANCE = "attendance_records" // Sesuai dengan nama tabel Room Anda
+    
+    // --- Storage Paths (Optional) ---
+    const val STORAGE_FACES = "face_embeddings"
 }

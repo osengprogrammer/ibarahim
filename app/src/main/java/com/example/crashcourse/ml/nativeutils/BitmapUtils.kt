@@ -1,4 +1,4 @@
-package com.example.crashcourse.ml
+package com.example.crashcourse.ml.nativeutils // 👈 Pastikan ini benar
 
 import android.graphics.Rect
 import android.media.Image
@@ -8,40 +8,27 @@ import java.nio.ByteOrder
 
 /**
  * =====================================================
- * BITMAP UTILS - NATIVE OPTIMIZED VERSION
+ * BITMAP UTILS - NATIVE OPTIMIZED VERSION (V.15.5)
  * =====================================================
- * This object is now a high-speed bridge. It no longer 
- * uses Android Bitmaps for the camera stream, which 
- * saves RAM and prevents lag.
  */
 object BitmapUtils {
-    // ✅ Matches MobileFaceNet requirement
     private const val INPUT_SIZE = 112 
     private const val BYTES_PER_FLOAT = 4
 
-    /**
-     * 🚀 FAST NATIVE PATH
-     * Directly processes YUV planes into a normalized Float buffer.
-     * * @param image The raw ImageProxy.image from the camera
-     * @param boundingBox The face location detected by ML Kit
-     * @param rotation The sensor rotation (usually 90 or 270)
-     * @param outputSize Targeted model input (112)
-     */
     fun preprocessFace(
         image: Image, 
         boundingBox: Rect, 
         rotation: Int,
         outputSize: Int = INPUT_SIZE
     ): ByteBuffer {
-        // 1. Allocate Direct Buffer (C++ requires Direct for address access)
-        // Size = 112 * 112 * 3 (RGB) * 4 (Float)
+        // Alokasi Direct Buffer untuk akses memori tingkat C++
+        // Ukuran: 112 * 112 * 3 channel * 4 byte (Float32)
         val buffer = ByteBuffer.allocateDirect(outputSize * outputSize * 3 * BYTES_PER_FLOAT)
             .order(ByteOrder.nativeOrder())
 
         val planes = image.planes
         
-        // 2. 🚀 Call the C++ Engine (native_image.cpp)
-        // This function handles YUV->RGB, Cropping, Rotating, and Scaling in ONE pass.
+        // Memanggil fungsi JNI di native_image.cpp
         NativeImageProcessor.preprocessFace(
             yBuffer = planes[0].buffer,
             uBuffer = planes[1].buffer,
@@ -52,17 +39,19 @@ object BitmapUtils {
             uvRowStride = planes[1].rowStride,
             yPixelStride = planes[0].pixelStride,
             uvPixelStride = planes[1].pixelStride,
-            cropLeft = boundingBox.left,
-            cropTop = boundingBox.top,
-            cropWidth = boundingBox.width(),
-            cropHeight = boundingBox.height(),
+            cropLeft = boundingValue(boundingBox.left, image.width),
+            cropTop = boundingValue(boundingBox.top, image.height),
+            cropWidth = boundingValue(boundingBox.width(), image.width),
+            cropHeight = boundingValue(boundingBox.height(), image.height),
             rotation = rotation,
             outputSize = outputSize,
             outBuffer = buffer
         )
 
-        // Reset pointer for TFLite reader
         buffer.rewind()
         return buffer
     }
+
+    // Helper sederhana untuk mencegah angka negatif yang bikin JNI crash
+    private fun boundingValue(value: Int, max: Int): Int = value.coerceIn(0, max)
 }

@@ -47,8 +47,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * 🖼️ Azura Tech Gallery Upload Screen (FIXED)
- * Mendukung pendaftaran biometrik via galeri dengan multi-rombel/mata kuliah.
+ * 🖼️ Azura Tech Gallery Upload Screen (V.10.60 - Secure Edition)
+ * Mendukung pendaftaran biometrik via galeri dengan proteksi wajah mirip (Anti-Fraud).
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -92,15 +92,16 @@ fun SingleUploadScreen(
                         ImageDecoder.decodeBitmap(source).copy(Bitmap.Config.ARGB_8888, true)
                     }
 
+                    // Deteksi wajah dan ekstrak embedding dari foto galeri
                     val result = PhotoProcessingUtils.processBitmapForFaceEmbedding(context, bmp)
                     
                     withContext(Dispatchers.Main) {
                         if (result != null) {
                             capturedBitmap = result.first
                             embedding = result.second
-                            snackbarHostState.showSnackbar("Wajah terdeteksi & biometrik berhasil diekstrak!")
+                            snackbarHostState.showSnackbar("Wajah terdeteksi! Biometrik berhasil diekstrak.")
                         } else {
-                            snackbarHostState.showSnackbar("Wajah tidak ditemukan! Gunakan foto yang lebih jelas.")
+                            snackbarHostState.showSnackbar("Wajah tidak ditemukan! Gunakan foto portrait yang jelas.")
                         }
                         isProcessing = false
                     }
@@ -150,7 +151,7 @@ fun SingleUploadScreen(
             // --- 📸 GALLERY SELECTION BOX ---
             Box(
                 Modifier
-                    .size(200.dp)
+                    .size(180.dp)
                     .clip(RoundedCornerShape(32.dp))
                     .background(Color.White)
                     .clickable { if (!isProcessing) galleryLauncher.launch("image/*") }
@@ -170,11 +171,11 @@ fun SingleUploadScreen(
                     )
                 } else {
                     if (isProcessing) {
-                        CircularProgressIndicator(color = AzuraPrimary)
+                        CircularProgressIndicator(color = AzuraPrimary, strokeWidth = 3.dp)
                     } else {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Icon(Icons.Default.AddPhotoAlternate, null, Modifier.size(48.dp), tint = AzuraPrimary)
-                            Text("Pilih Foto", color = AzuraPrimary, fontWeight = FontWeight.Bold)
+                            Text("Pilih Foto", color = AzuraPrimary, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                         }
                     }
                 }
@@ -236,26 +237,39 @@ fun SingleUploadScreen(
                     isProcessing = true
                     scope.launch(Dispatchers.IO) {
                         try {
+                            // Simpan foto ke penyimpanan internal
                             val path = PhotoStorageUtils.saveFacePhoto(context, capturedBitmap!!, finalId)
                             
                             if (path != null) {
-                                // 🚀 FIX: Menggunakan registerFaceWithMultiUnit
+                                // 🚀 FIXED: Menggunakan parameter onDuplicateId, onSimilarFace, dan onError
                                 viewModel.registerFaceWithMultiUnit(
                                     studentId = finalId,
                                     name = finalName,
                                     embedding = embedding!!,
+                                    units = selectedRombels.toList(),
                                     photoUrl = path,
-                                    units = selectedRombels.toList(), // Menerima List
                                     onSuccess = {
                                         scope.launch(Dispatchers.Main) {
                                             isProcessing = false
                                             showSuccessDialog = true
                                         }
                                     },
-                                    onDuplicate = { dupId: String -> // Tipe eksplisit ditambahkan
+                                    onDuplicateId = { dupId -> // ✅ Handle ID duplikat
                                         scope.launch(Dispatchers.Main) {
                                             isProcessing = false
-                                            snackbarHostState.showSnackbar("ID $dupId sudah digunakan!")
+                                            snackbarHostState.showSnackbar("Gagal: ID $dupId sudah digunakan!")
+                                        }
+                                    },
+                                    onSimilarFace = { existingName -> // ✅ Handle proteksi wajah mirip
+                                        scope.launch(Dispatchers.Main) {
+                                            isProcessing = false
+                                            snackbarHostState.showSnackbar("Gagal: Wajah mirip dengan $existingName di database!")
+                                        }
+                                    },
+                                    onError = { err -> // ✅ Handle error sistem/sesi
+                                        scope.launch(Dispatchers.Main) {
+                                            isProcessing = false
+                                            snackbarHostState.showSnackbar("Sistem: $err")
                                         }
                                     }
                                 )

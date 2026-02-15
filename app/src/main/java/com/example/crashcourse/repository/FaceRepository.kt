@@ -10,117 +10,135 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
 
 /**
- * 📂 FaceRepository (V.6.6 - Strict Logic & Double Validation Ready)
- * Pusat kendali data siswa dan biometrik wajah dengan validasi ketat.
+ * 📂 FaceRepository (V.10.4 - Unified Identity Edition)
+ * Jembatan antara Cloud, Room, dan RAM Cache.
+ * Menggunakan schoolId tunggal untuk memastikan data tidak pernah bocor antar sekolah.
  */
 class FaceRepository(private val application: Application) {
     
     private val db = AppDatabase.getInstance(application)
     private val faceDao = db.faceDao()
 
-    // 1. Ambil Flow Data Wajah (Live Data untuk UI)
-    fun getAllFacesFlow(): Flow<List<FaceEntity>> = faceDao.getAllFacesFlow()
+    // ==========================================
+    // 🔍 1. READ OPERATIONS
+    // ==========================================
 
-    // 2. Ambil Data Wajah Berdasarkan Nama
-    // Digunakan oleh ViewModel untuk memvalidasi hasil deteksi AI Scanner
-    suspend fun getFaceByName(name: String): List<FaceEntity> = withContext(Dispatchers.IO) {
-        try {
-            faceDao.getFaceByName(name.trim())
-        } catch (e: Exception) {
-            Log.e("FaceRepo", "Error fetching face by name: ${e.message}")
-            emptyList()
-        }
+    fun getAllFacesFlow(schoolId: String): Flow<List<FaceEntity>> {
+        return faceDao.getAllFacesFlow(schoolId)
     }
 
-    // 3. Logika Registrasi & Update (Atomic Operation)
+    suspend fun getFaceByStudentId(studentId: String): FaceEntity? = withContext(Dispatchers.IO) {
+        faceDao.getFaceByStudentId(studentId.trim())
+    }
+
+    suspend fun getStudentsByClass(className: String): List<FaceEntity> = withContext(Dispatchers.IO) {
+        faceDao.getStudentsByClass(className)
+    }
+
+    // ==========================================
+    // ✍️ 2. WRITE OPERATIONS (Enrollment)
+    // ==========================================
+
     suspend fun registerFace(
         studentId: String,
-        sekolahId: String,
+        schoolId: String,
         name: String,
         embedding: FloatArray,
         units: List<MasterClassWithNames>,
         photoUrl: String?
     ) = withContext(Dispatchers.IO) {
         
-        // Gabungkan list kelas menjadi CSV untuk kompatibilitas database lama
-        val combinedClassName = units.joinToString(", ") { it.className }
+        if (embedding.isEmpty()) {
+            throw IllegalArgumentException("Data biometrik (embedding) tidak ditemukan!")
+        }
+
+        val enrolledClassList = units.map { it.className } 
         val primaryUnit = units.firstOrNull()
 
         val face = FaceEntity(
             studentId = studentId.trim(),
-            sekolahId = sekolahId,
+            schoolId = schoolId, // 🛡️ Stempel schoolId yang sah
             name = name.trim(),
             photoUrl = photoUrl,
             embedding = embedding,
-            className = combinedClassName,
+            enrolledClasses = enrolledClassList, 
             grade = primaryUnit?.gradeName ?: "",
-            role = primaryUnit?.roleName ?: Constants.ROLE_USER,
-            program = primaryUnit?.programName ?: "",
             subClass = primaryUnit?.subClassName ?: "",
-            subGrade = primaryUnit?.subGradeName ?: "",
             timestamp = System.currentTimeMillis()
         )
 
         try {
-            // Aksi 1: Simpan ke Local Room DB
+            // 1. Cloud First (Source of Truth)
+            FirestoreStudent.uploadStudent(face)
+
+            // 2. Local Persistence
             faceDao.insert(face)
             
-            // Aksi 2: Upload ke Firestore Cloud
-            FirestoreStudent.uploadStudent(face)
-            
-            // Aksi 3: Refresh Cache agar AI langsung mengenali wajah baru
+            // 3. AI Update
             FaceCache.refresh(application)
             
-            Log.d("FaceRepo", "✅ Success Register: ${face.name}")
+            Log.d("FaceRepo", "✅ Registrasi Berhasil: ${face.name} ke School: $schoolId")
         } catch (e: Exception) {
-            Log.e("FaceRepo", "❌ Register Failed: ${e.message}")
-            throw e // Re-throw agar UI bisa menangkap error
+            Log.e("FaceRepo", "❌ Registrasi Gagal", e)
+            throw e 
         }
     }
 
-    // 4. Logika Smart Sync Siswa dari Firestore
+    // ==========================================
+    // 🔄 3. SMART SYNC (The Core Logic)
+    // ==========================================
+
+    /**
+     * 🚀 SMART SYNC AZURA TECH
+     * Menggunakan schoolId tunggal hasil reformasi database.
+     */
     suspend fun syncStudents(user: UserEntity) = withContext(Dispatchers.IO) {
-        val lastSync = faceDao.getLastSyncTimestamp() ?: 0L
+        // 🔥 FIXED: Menggunakan schoolId, bukan schoolId
+        val targetSchoolId = user.schoolId 
+        
+        if (targetSchoolId.isBlank()) {
+            Log.e("FaceRepo", "⚠️ Sync Aborted: schoolId User kosong!")
+            return@withContext
+        }
+        
+        // 🛡️ Cek jumlah data lokal untuk menentukan Full Sync atau Delta Sync
+        val localCount = faceDao.getStudentCount(targetSchoolId)
+        val lastSync = if (localCount == 0) 0L else faceDao.getLastSyncTimestamp(targetSchoolId) ?: 0L
         
         try {
-            val students = FirestoreStudent.fetchSmartSyncStudents(
-                sekolahId = user.sekolahId ?: "",
+            Log.d("FaceRepo", "🔄 Memulai Sync: Sekolah $targetSchoolId, LastSync: $lastSync")
+
+            val remoteStudents = FirestoreStudent.fetchSmartSyncStudents(
+                schoolId = targetSchoolId,
                 assignedClasses = user.assignedClasses,
                 role = user.role,
                 lastSync = lastSync
             )
             
-            if (students.isNotEmpty()) {
-                faceDao.insertAll(students)
-                // Wajib Refresh Cache setelah sinkronisasi massal
+            if (remoteStudents.isNotEmpty()) {
+                faceDao.insertAll(remoteStudents)
                 FaceCache.refresh(application)
-                Log.d("FaceRepo", "✅ Sync Complete: ${students.size} students added/updated")
+                Log.d("FaceRepo", "✅ Sync Berhasil: ${remoteStudents.size} jiwa baru masuk.")
+            } else {
+                Log.d("FaceRepo", "✅ Sinkronisasi Selesai: Data sudah up-to-date.")
             }
         } catch (e: Exception) {
-            Log.e("FaceRepo", "❌ Sync Failed: ${e.message}")
+            Log.e("FaceRepo", "❌ Sinkronisasi Gagal", e)
         }
     }
 
-    // 5. Cek Duplikasi Student ID (Primary Key Check)
-    suspend fun getFaceByStudentId(studentId: String): FaceEntity? = withContext(Dispatchers.IO) {
-        faceDao.getFaceByStudentId(studentId.trim())
-    }
+    // ==========================================
+    // 🗑️ 4. DELETE OPERATIONS
+    // ==========================================
 
-    // 6. Delete Student (Sync Local + Cloud)
     suspend fun deleteFace(studentId: String, face: FaceEntity) = withContext(Dispatchers.IO) {
         try {
-            // Hapus dari Cloud dulu
             FirestoreStudent.deleteStudent(studentId.trim())
-            
-            // Hapus dari Local
             faceDao.delete(face)
-            
-            // Refresh Cache agar AI berhenti mengenali wajah ini
             FaceCache.refresh(application)
-            
-            Log.d("FaceRepo", "✅ Delete Success: $studentId")
+            Log.d("FaceRepo", "🗑️ Siswa dihapus: ${face.name}")
         } catch (e: Exception) {
-            Log.e("FaceRepo", "❌ Delete Failed: ${e.message}")
+            Log.e("FaceRepo", "❌ Gagal menghapus", e)
             throw e
         }
     }

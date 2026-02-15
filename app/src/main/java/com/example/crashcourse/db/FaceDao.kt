@@ -4,11 +4,15 @@ import androidx.room.*
 import kotlinx.coroutines.flow.Flow
 
 /**
- * 👤 Azura Tech Face DAO (V.3 - Optimized for Many-to-Many)
- * Mengelola akses data biometrik mahasiswa/personel.
+ * 👤 Azura Tech Face DAO (V.10.24 - Unified Sync Edition)
+ * Dioptimalkan untuk sinkronisasi Cloud-Local menggunakan identitas schoolId tunggal.
  */
 @Dao
 interface FaceDao {
+
+    // ==========================================
+    // 💾 INSERT & UPDATE
+    // ==========================================
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(face: FaceEntity)
@@ -16,58 +20,69 @@ interface FaceDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(faces: List<FaceEntity>)
 
-    /**
-     * 🧠 Digunakan oleh FaceCache untuk memuat semua data ke RAM saat aplikasi dimulai.
-     */
-    @Query("SELECT * FROM students")
-    fun getAllFaces(): List<FaceEntity> 
-    
-    /**
-     * 📱 Digunakan oleh UI untuk menampilkan daftar mahasiswa secara real-time.
-     */
-    @Query("SELECT * FROM students ORDER BY name ASC")
-    fun getAllFacesFlow(): Flow<List<FaceEntity>>
+    // ==========================================
+    // 🧠 AI ENGINE LOADERS (Gallery Pipeline)
+    // ==========================================
+
+    @Query("SELECT * FROM students WHERE schoolId = :schoolId")
+    suspend fun getFacesBySchool(schoolId: String): List<FaceEntity>
 
     /**
-     * 🔍 Mengambil data berdasarkan ID unik mahasiswa.
+     * 🔥 FIXED: Mengambil schoolId (bukan schoolId) dari tabel user.
+     * Ini adalah kunci agar AI Gallery terisi otomatis tanpa data kosong.
      */
+    @Query("SELECT schoolId FROM current_user LIMIT 1")
+    suspend fun getSchoolIdFromSession(): String?
+
+    /**
+     * 🧠 SMART LOADER
+     * Mengambil gallery biometrik secara instan berdasarkan identitas user yang login.
+     */
+    @Transaction
+    suspend fun getMyStudentsForAI(): List<FaceEntity> {
+        val currentSchoolId = getSchoolIdFromSession() ?: return emptyList()
+        return getFacesBySchool(currentSchoolId)
+    }
+
+    // ==========================================
+    // 🕒 SYNC & SAFETY UTILS 
+    // ==========================================
+
+    @Query("SELECT COUNT(*) FROM students WHERE schoolId = :schoolId")
+    suspend fun getStudentCount(schoolId: String): Int 
+
+    @Query("SELECT MAX(timestamp) FROM students WHERE schoolId = :schoolId")
+    suspend fun getLastSyncTimestamp(schoolId: String): Long?
+
+    // ==========================================
+    // 📱 UI FLOWS & SEARCH
+    // ==========================================
+
+    @Query("SELECT * FROM students WHERE schoolId = :schoolId ORDER BY name ASC")
+    fun getAllFacesFlow(schoolId: String): Flow<List<FaceEntity>>
+
     @Query("SELECT * FROM students WHERE studentId = :studentId LIMIT 1")
     suspend fun getFaceByStudentId(studentId: String): FaceEntity?
     
-    /**
-     * 🔎 Mencari nama mahasiswa (Full-text search sederhana).
-     * Gunakan "%name%" saat memanggil fungsi ini.
-     */
-    @Query("SELECT * FROM students WHERE name LIKE :searchQuery")
-    suspend fun getFaceByName(searchQuery: String): List<FaceEntity>
+    @Query("SELECT * FROM students WHERE enrolledClasses LIKE '%' || :className || '%'")
+    suspend fun getStudentsByClass(className: String): List<FaceEntity>
 
-    /**
-     * 🔥 FILTER MANY-TO-MANY (Optimized)
-     * Mencari mahasiswa yang terdaftar di salah satu kelas dari daftar yang diberikan.
-     * Digunakan agar Guru hanya melihat mahasiswa di mata kuliah yang ia ampu.
-     */
-    @Query("SELECT * FROM students WHERE className IN (:classes)")
-    fun getFacesByClasses(classes: List<String>): Flow<List<FaceEntity>>
+    @Query("SELECT * FROM students WHERE name LIKE '%' || :searchQuery || '%' AND schoolId = :schoolId")
+    suspend fun searchFaceByName(searchQuery: String, schoolId: String): List<FaceEntity>
 
-    /**
-     * 🏫 Mengambil data mahasiswa berdasarkan Sekolah ID.
-     */
-    @Query("SELECT * FROM students WHERE sekolahId = :sekolahId")
-    fun getFacesBySchool(sekolahId: String): Flow<List<FaceEntity>>
+    // ==========================================
+    // 🗑️ CLEANUP (LOGOUT & RESET)
+    // ==========================================
 
-    /**
-     * 🕒 Smart Sync: Mendapatkan waktu pembaruan terakhir di database lokal.
-     * Digunakan untuk menarik hanya "data baru" (incremental sync) dari Firestore.
-     */
-    @Query("SELECT MAX(timestamp) FROM students")
-    suspend fun getLastSyncTimestamp(): Long?
-
-    @Query("DELETE FROM students WHERE sekolahId = :sekolahId")
-    suspend fun deleteAllFacesBySchool(sekolahId: String)
-    
-    @Query("DELETE FROM students")
-    suspend fun deleteAll()
+    @Query("DELETE FROM students WHERE schoolId = :schoolId")
+    suspend fun deleteFacesBySchool(schoolId: String)
     
     @Delete
     suspend fun delete(face: FaceEntity)
+
+    /**
+     * ✅ Wajib ada agar UserRepository.clearAllData() berfungsi total saat Logout.
+     */
+    @Query("DELETE FROM students")
+    suspend fun deleteAll()
 }

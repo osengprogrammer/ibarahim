@@ -1,5 +1,6 @@
 package com.example.crashcourse.ui.auth
 
+import android.util.Log
 import android.widget.Toast
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -17,10 +18,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.crashcourse.viewmodel.AuthViewModel
 import com.example.crashcourse.viewmodel.AuthState
 
+private const val TAG = "AzuraLoginUI"
+
 @Composable
 fun LoginScreen(
     onNavigateToRegister: () -> Unit,
-    viewModel: AuthViewModel // ⚠️ WAJIB: Jangan pakai "= viewModel()" disini.
+    viewModel: AuthViewModel
 ) {
     val context = LocalContext.current
     val state by viewModel.authState.collectAsStateWithLifecycle()
@@ -28,8 +31,6 @@ fun LoginScreen(
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
 
-    // --- LOGIKA UI SAJA (Navigasi ditangani NavGraph) ---
-    
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -50,6 +51,11 @@ fun LoginScreen(
             )
 
             Spacer(modifier = Modifier.height(40.dp))
+
+            // --- DEBUG INFO (Akan muncul di Logcat setiap Re-composition) ---
+            LaunchedEffect(state) {
+                Log.d(TAG, "UI Observed State: ${state::class.java.simpleName}")
+            }
 
             if (state is AuthState.Error) {
                 Card(
@@ -89,14 +95,22 @@ fun LoginScreen(
 
             if (state is AuthState.Loading) {
                 CircularProgressIndicator()
-                Text("Sedang masuk...", modifier = Modifier.padding(top = 8.dp))
+                Text(
+                    text = (state as? AuthState.Loading)?.message ?: "Sedang masuk...",
+                    modifier = Modifier.padding(top = 8.dp)
+                )
             } else {
                 Button(
                     onClick = {
+                        // 🔥 TRIGGER LOGCAT MANUAL
+                        Log.i(TAG, "🔘 Login Button Clicked! Email: $email")
+                        
                         if (email.isBlank() || password.isBlank()) {
+                            Log.w(TAG, "⚠️ Validation failed: Empty fields")
                             Toast.makeText(context, "Isi email dan password!", Toast.LENGTH_SHORT).show()
                         } else {
-                            viewModel.login(email, password)
+                            Log.d(TAG, "🚀 Calling viewModel.login()...")
+                            viewModel.login(email.trim(), password.trim())
                         }
                     },
                     modifier = Modifier.fillMaxWidth().height(56.dp)

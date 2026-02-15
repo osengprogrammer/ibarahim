@@ -6,7 +6,7 @@ import android.graphics.Rect
 import androidx.core.graphics.scale
 import android.util.Log
 import com.example.crashcourse.ml.FaceRecognizer
-import com.example.crashcourse.utils.NativeMath // ✅ Import NativeMath
+import com.example.crashcourse.ml.nativeutils.NativeMath // ✅ Import NativeMath
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.face.FaceDetection
 import com.google.mlkit.vision.face.FaceDetectorOptions

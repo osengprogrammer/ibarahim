@@ -26,7 +26,8 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.crashcourse.db.MasterClassWithNames
-import com.example.crashcourse.ui.components.* import com.example.crashcourse.ui.theme.*
+import com.example.crashcourse.ui.components.*
+import com.example.crashcourse.ui.theme.*
 import com.example.crashcourse.utils.PhotoStorageUtils
 import com.example.crashcourse.viewmodel.FaceViewModel
 import com.example.crashcourse.viewmodel.MasterClassViewModel
@@ -35,8 +36,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * 📝 Azura Tech Add User Screen (Many-to-Many Ready)
- * Mengelola pendaftaran personil dengan dukungan multi-rombel/mata kuliah.
+ * 📝 Azura Tech Add User Screen (V.15.6 - Eagle Eye Synced)
+ * Filosofi: Registrasi yang Presisi adalah Kunci Absensi yang Akurat.
+ * Perubahan: Sinkronisasi dengan FaceCaptureScreen V.15.6 (Normalization Ready).
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -124,7 +126,6 @@ fun AddUserScreen(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    // Tombol Tambah
                     AssistChip(
                         onClick = { showRombelDialog = true },
                         label = { Text("Tambah Matkul") },
@@ -132,7 +133,6 @@ fun AddUserScreen(
                         colors = AssistChipDefaults.assistChipColors(containerColor = AzuraPrimary.copy(alpha = 0.1f))
                     )
 
-                    // Daftar Chip yang terpilih
                     selectedRombels.forEach { rombel ->
                         InputChip(
                             selected = true,
@@ -211,7 +211,8 @@ fun AddUserScreen(
                                 Image(
                                     bitmap = capturedBitmap!!.asImageBitmap(),
                                     contentDescription = null,
-                                    contentScale = ContentScale.Crop
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.fillMaxSize()
                                 )
                             }
                         }
@@ -238,12 +239,11 @@ fun AddUserScreen(
                                 val photoPath = PhotoStorageUtils.saveFacePhoto(context, capturedBitmap!!, finalId)
                                 
                                 if (photoPath != null) {
-                                    // 🔥 SINKRONISASI KE FUNGSI MULTI UNIT DI VIEWMODEL 🔥
                                     faceViewModel.registerFaceWithMultiUnit(
                                         studentId = finalId,
                                         name = finalName,
                                         embedding = embedding!!,
-                                        units = selectedRombels.toList(), // Mengirim List Objek
+                                        units = selectedRombels.toList(),
                                         photoUrl = photoPath,
                                         onSuccess = {
                                             scope.launch(Dispatchers.Main) {
@@ -251,10 +251,22 @@ fun AddUserScreen(
                                                 showSuccessDialog = true 
                                             }
                                         },
-                                        onDuplicate = { id ->
+                                        onDuplicateId = { id ->
                                             scope.launch(Dispatchers.Main) {
                                                 isSubmitting = false
-                                                snackbarHostState.showSnackbar("ID $id sudah terdaftar!") 
+                                                snackbarHostState.showSnackbar("Gagal: ID $id sudah digunakan!") 
+                                            }
+                                        },
+                                        onSimilarFace = { existingName ->
+                                            scope.launch(Dispatchers.Main) {
+                                                isSubmitting = false
+                                                snackbarHostState.showSnackbar("Wajah sangat mirip dengan $existingName di database!")
+                                            }
+                                        },
+                                        onError = { errorMessage ->
+                                            scope.launch(Dispatchers.Main) {
+                                                isSubmitting = false
+                                                snackbarHostState.showSnackbar("Sistem: $errorMessage")
                                             }
                                         }
                                     )
@@ -262,7 +274,7 @@ fun AddUserScreen(
                             } catch (e: Exception) {
                                 withContext(Dispatchers.Main) {
                                     isSubmitting = false
-                                    snackbarHostState.showSnackbar("Gagal: ${e.message}")
+                                    snackbarHostState.showSnackbar("Gagal Simpan: ${e.message}")
                                 }
                             }
                         }
@@ -294,7 +306,6 @@ fun AddUserScreen(
                 )
             }
 
-            // --- 🚀 ROMBEL SELECTION DIALOG (REUSABLE COMPONENT) ---
             if (showRombelDialog) {
                 RombelSelectionDialog(
                     allClasses = masterClasses,
@@ -308,7 +319,6 @@ fun AddUserScreen(
                 )
             }
 
-            // --- CAMERA OVERLAY ---
             if (showFaceCapture) {
                 FaceCaptureScreen(
                     mode = captureMode,

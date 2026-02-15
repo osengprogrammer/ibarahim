@@ -12,22 +12,24 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
 /**
- * 🏗️ Master Class ViewModel
+ * 🏗️ Master Class ViewModel (V.10.18 - Final Refactored)
  * Mengelola logic untuk Unit Rakitan (Rombel) berbasis 6-Pilar.
- * Fixed: Updated delete logic to match FirestoreRombel's composite ID.
+ * Kompatibel dengan skema Multi-Tenant schoolId.
  */
 class MasterClassViewModel(application: Application) : AndroidViewModel(application) {
     private val db = AppDatabase.getInstance(application)
     private val masterClassDao = db.masterClassDao()
     private val userDao = db.userDao()
 
-    private val _sekolahId = MutableStateFlow<String?>(null)
+    // Mengamati ID Sekolah yang sedang aktif
+    private val _schoolId = MutableStateFlow<String?>(null)
 
-    // 📊 REAKTIF: List MasterClass yang sudah di-join dengan nama kategori
+    // 📊 REAKTIF: List MasterClass yang sudah di-join dengan nama kategori asli
     @OptIn(ExperimentalCoroutinesApi::class)
-    val masterClassesWithNames: StateFlow<List<MasterClassWithNames>> = _sekolahId
+    val masterClassesWithNames: StateFlow<List<MasterClassWithNames>> = _schoolId
         .filterNotNull()
         .flatMapLatest { sid ->
+            // Menggunakan method baru di DAO yang sudah kita perbaiki
             masterClassDao.getAllMasterClassesWithNamesFlow(sid)
         }
         .flowOn(Dispatchers.IO)
@@ -38,11 +40,15 @@ class MasterClassViewModel(application: Application) : AndroidViewModel(applicat
         )
 
     init {
+        // Observer sesi user secara otomatis
         viewModelScope.launch(Dispatchers.IO) {
             userDao.getCurrentUserFlow().collect { user ->
-                _sekolahId.value = user?.sekolahId
-                if (user?.sekolahId != null) {
-                    syncFromCloud(user.sekolahId!!)
+                val sid = user?.schoolId
+                _schoolId.value = sid
+                
+                if (sid != null) {
+                    // Jalankan sinkronisasi otomatis saat sekolah terdeteksi
+                    syncFromCloud(sid)
                 }
             }
         }
@@ -56,11 +62,12 @@ class MasterClassViewModel(application: Application) : AndroidViewModel(applicat
         cId: Int, scId: Int, gId: Int, sgId: Int, pId: Int, rId: Int
     ) {
         viewModelScope.launch(Dispatchers.IO) {
-            val sid = _sekolahId.value ?: return@launch
+            val sid = _schoolId.value ?: return@launch
             
+            // 🔥 FIXED: Constructor MasterClassRoom sekarang pakai 'schoolId'
             val newClass = MasterClassRoom(
-                classId = 0, 
-                sekolahId = sid,
+                classId = 0, // Akan diganti oleh generated ID atau Cloud ID
+                schoolId = sid, 
                 className = name,
                 gradeId = gId,
                 classOptionId = cId,
@@ -70,14 +77,16 @@ class MasterClassViewModel(application: Application) : AndroidViewModel(applicat
                 roleId = rId
             )
 
+            // 1. Simpan Lokal untuk mendapatkan ID
             val generatedId = masterClassDao.insertClass(newClass)
             val classWithId = newClass.copy(classId = generatedId.toInt())
 
             try {
+                // 2. Kirim ke Firestore (Gunakan data yang sudah ada ID-nya)
                 FirestoreRombel.saveMasterClass(classWithId)
-                Log.d("MasterClassVM", "✅ Saved to Cloud: $name")
+                Log.d("MasterClassVM", "✅ Unit Synced to Cloud: $name")
             } catch (e: Exception) {
-                Log.e("MasterClassVM", "❌ Failed to save to cloud", e)
+                Log.e("MasterClassVM", "❌ Cloud Save Failed", e)
             }
         }
     }
@@ -88,23 +97,23 @@ class MasterClassViewModel(application: Application) : AndroidViewModel(applicat
     fun deleteClass(item: MasterClassWithNames) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                // 🚀 THE FIX: Kirim SECOLAH_ID dan CLASS_ID sesuai signature baru
+                // 🔥 FIXED: Parameter sesuai signature baru FirestoreRombel
                 FirestoreRombel.deleteMasterClass(
-                    sekolahId = item.sekolahId, // Argumen 1 (String)
-                    classId = item.classId      // Argumen 2 (Int)
+                    schoolId = item.schoolId, 
+                    classId = item.classId
                 )
                 
-                // Hapus dari Local Room
+                // Hapus dari Local Room (Gunakan Entity)
                 val entityToDelete = MasterClassRoom(
                     classId = item.classId,
-                    sekolahId = item.sekolahId,
+                    schoolId = item.schoolId,
                     className = item.className ?: "",
                     gradeId = 0, classOptionId = 0, programId = 0,
                     subClassId = 0, subGradeId = 0, roleId = 0
                 )
                 masterClassDao.deleteClass(entityToDelete)
                 
-                Log.d("MasterClassVM", "🗑️ Deleted from Cloud & Local: ${item.className}")
+                Log.d("MasterClassVM", "🗑️ Deleted: ${item.className}")
             } catch (e: Exception) {
                 Log.e("MasterClassVM", "❌ Delete failed", e)
             }
@@ -114,12 +123,13 @@ class MasterClassViewModel(application: Application) : AndroidViewModel(applicat
     /**
      * 🔄 Sinkronisasi Data dari Cloud
      */
-    fun syncFromCloud(sekolahId: String) {
+    fun syncFromCloud(schoolId: String) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                val cloudData = FirestoreRombel.fetchMasterClasses(sekolahId)
+                val cloudData = FirestoreRombel.fetchMasterClasses(schoolId)
                 if (cloudData.isNotEmpty()) {
                     masterClassDao.insertAll(cloudData)
+                    Log.d("MasterClassVM", "📥 ${cloudData.size} units synced from cloud.")
                 }
             } catch (e: Exception) {
                 Log.e("MasterClassVM", "❌ Sync failed", e)

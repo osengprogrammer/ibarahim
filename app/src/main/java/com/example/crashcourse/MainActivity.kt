@@ -13,19 +13,36 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
 import androidx.navigation.compose.rememberNavController
+import com.example.crashcourse.db.FaceCache
 import com.example.crashcourse.navigation.NavGraph
 import com.example.crashcourse.ui.theme.CrashcourseTheme
 import com.example.crashcourse.viewmodel.AuthState
 import com.example.crashcourse.viewmodel.AuthViewModel
+import kotlinx.coroutines.launch
 
+/**
+ * 🏛️ MainActivity (V.12.0 - Monisme Release)
+ * Authority: Root Controller untuk Azura Attendance.
+ * Inovasi: Cold-Start FaceCache Warmup & Reactive Auth Bridge.
+ */
 class MainActivity : ComponentActivity() {
-    // Instance utama ViewModel yang mengontrol seluruh aplikasi
+    
+    // AuthViewModel sebagai Single Source of Truth untuk status login
     private val authViewModel: AuthViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
         enableEdgeToEdge()
+
+        // 🔥 WARM-UP MEMORY (Monisme Strategy)
+        // Kita tidak menunggu user masuk ke Scanner. 
+        // Begitu aplikasi diklik, kita langsung siapkan FaceCache di RAM.
+        lifecycleScope.launch {
+            FaceCache.ensureLoaded(applicationContext)
+        }
         
         setContent {
             CrashcourseTheme {
@@ -38,19 +55,23 @@ class MainActivity : ComponentActivity() {
                 ) {
                     Box(modifier = Modifier.fillMaxSize()) {
                         
-                        // FIX: Teruskan authViewModel ke NavGraph
+                        // 🧭 ROOT NAVIGATION ENGINE
+                        // Menangani perpindahan antara Login -> MainScreen (Dashboard+Scanner)
                         NavGraph(
                             navController = navController,
                             authState = authState,
-                            viewModel = authViewModel, // <--- TAMBAHAN PENTING
+                            authViewModel = authViewModel, 
                             onLogoutRequest = { 
-                                authViewModel.logout() 
+                                // Saat logout, bersihkan RAM biometrik untuk keamanan (Privacy First)
+                                authViewModel.logout()
+                                FaceCache.clear() 
                             }
                         )
 
-                        // 🔍 Overlay Loading
+                        // 🔍 INITIALIZING OVERLAY
+                        // Tampil saat AuthViewModel sedang mengecek Firebase Session (Persistent Login)
                         if (authState is AuthState.Checking) {
-                            LoadingScreen("Memverifikasi Sesi Azura...")
+                            LoadingScreen("Sinkronisasi Sesi Azura...")
                         }
                     }
                 }
@@ -59,17 +80,39 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-// ... LoadingScreen tetap sama ...
+// ==========================================
+// 🎨 GLOBAL UI COMPONENTS
+// ==========================================
+
+/**
+ * Layar Loading Global dengan Identitas Visual Azura Tech.
+ */
 @Composable
-fun LoadingScreen(message: String = "Menghubungkan ke Azura Cloud...") {
+fun LoadingScreen(message: String = "Mohon Tunggu...") {
     Box(
-        modifier = Modifier.fillMaxSize().padding(16.dp), 
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp), 
         contentAlignment = Alignment.Center
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary, strokeWidth = 3.dp)
-            Spacer(modifier = Modifier.height(20.dp))
-            Text(text = message, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+            CircularProgressIndicator(
+                color = MaterialTheme.colorScheme.primary, 
+                strokeWidth = 4.dp,
+                trackColor = MaterialTheme.colorScheme.surfaceVariant
+            )
+            Spacer(modifier = Modifier.height(24.dp))
+            Text(
+                text = message, 
+                style = MaterialTheme.typography.titleMedium, 
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Text(
+                text = "Banyuwangi Digital Solution", 
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.outline
+            )
         }
     }
 }

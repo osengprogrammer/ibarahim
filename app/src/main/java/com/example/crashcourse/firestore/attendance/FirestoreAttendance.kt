@@ -16,8 +16,9 @@ import java.time.ZoneId
 import java.util.Date
 
 /**
- * 📅 FirestoreAttendance (FINAL & OPTIMIZED)
+ * 📅 FirestoreAttendance (V.10.21 - Repository Aligned)
  * Pusat kendali data absensi di Cloud.
+ * Update Log: Nama fungsi diselaraskan dengan AttendanceRepository V.10.20.
  */
 object FirestoreAttendance {
 
@@ -62,25 +63,23 @@ object FirestoreAttendance {
     }
 
     // ==========================================
-    // 2️⃣ FETCH HISTORY (Optimized with Server-side Filter)
+    // 2️⃣ FETCH HISTORICAL DATA (Renamed for Repository)
     // ==========================================
-    suspend fun fetchHistoryRecords(
+    suspend fun fetchHistoricalData(
         sekolahId: String,
         startMillis: Long,
         endMillis: Long,
-        className: String? = null // 🚀 Tambahkan parameter opsional
+        className: String? = null
     ): List<CheckInRecord> {
         return try {
             val startTs = Timestamp(Date(startMillis))
             val endTs = Timestamp(Date(endMillis))
 
-            // Inisialisasi Query Dasar
             var query: Query = db.collection(FirestorePaths.ATTENDANCE)
                 .whereEqualTo(Constants.KEY_SEKOLAH_ID, sekolahId)
                 .whereGreaterThanOrEqualTo(Constants.FIELD_TIMESTAMP, startTs)
                 .whereLessThanOrEqualTo(Constants.FIELD_TIMESTAMP, endTs)
 
-            // 🚀 SERVER-SIDE FILTER: Jika admin pilih kelas tertentu, filter di Cloud
             if (!className.isNullOrBlank() && className != "Semua Kelas") {
                 query = query.whereEqualTo(Constants.PILLAR_CLASS, className)
             }
@@ -103,40 +102,41 @@ object FirestoreAttendance {
                         photoPath = doc.getString(Constants.FIELD_PHOTO_PATH) ?: "",
                         className = doc.getString(Constants.PILLAR_CLASS) ?: "",
                         gradeName = doc.getString(Constants.PILLAR_GRADE) ?: "",
-                        role = doc.getString(Constants.FIELD_ROLE) ?: Constants.ROLE_USER
+                        role = doc.getString(Constants.FIELD_ROLE) ?: Constants.ROLE_USER,
+                        firestoreId = doc.id
                     )
                 }
         } catch (e: Exception) {
-            Log.e(TAG, "❌ fetchHistoryRecords failed", e)
+            Log.e(TAG, "❌ fetchHistoricalData failed", e)
             emptyList()
         }
     }
 
     // ==========================================
-    // 3️⃣ UPDATE STATUS
+    // 3️⃣ UPDATE STATUS (Renamed for Repository)
     // ==========================================
-    suspend fun updateAttendanceStatus(docId: String, newStatus: String) {
+    suspend fun updateStatus(docId: String, newStatus: String) {
         try {
             db.collection(FirestorePaths.ATTENDANCE)
                 .document(docId)
                 .update(Constants.FIELD_STATUS, newStatus)
                 .await()
         } catch (e: Exception) {
-            Log.e(TAG, "❌ updateAttendanceStatus failed", e)
+            Log.e(TAG, "❌ updateStatus failed", e)
         }
     }
 
     // ==========================================
-    // 4️⃣ DELETE LOG
+    // 4️⃣ DELETE RECORD (Renamed for Repository)
     // ==========================================
-    suspend fun deleteAttendanceLog(firestoreId: String) {
+    suspend fun deleteRecord(firestoreId: String) {
         try {
             db.collection(FirestorePaths.ATTENDANCE)
                 .document(firestoreId)
                 .delete()
                 .await()
         } catch (e: Exception) {
-            Log.e(TAG, "❌ deleteAttendanceLog failed", e)
+            Log.e(TAG, "❌ deleteRecord failed", e)
         }
     }
 
@@ -173,7 +173,8 @@ object FirestoreAttendance {
                         photoPath = doc.getString(Constants.FIELD_PHOTO_PATH) ?: "",
                         className = doc.getString(Constants.PILLAR_CLASS) ?: "",
                         gradeName = doc.getString(Constants.PILLAR_GRADE) ?: "",
-                        role = doc.getString(Constants.FIELD_ROLE) ?: Constants.ROLE_USER
+                        role = doc.getString(Constants.FIELD_ROLE) ?: Constants.ROLE_USER,
+                        firestoreId = doc.id
                     )
                 } ?: emptyList()
 

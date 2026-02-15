@@ -26,7 +26,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.crashcourse.db.FaceEntity
@@ -41,12 +40,10 @@ import com.example.crashcourse.viewmodel.MasterClassViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-// 🔥 FIX: Import wajib agar delegasi 'by' bekerja
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.setValue
 
 /**
- * 🛠️ EditUserScreen (V.6.1 - Fixed References)
+ * 🛠️ EditUserScreen (V.10.8 - Build Success Version)
+ * Mengelola pembaruan identitas, foto, dan rombel (Many-to-Many).
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -60,24 +57,25 @@ fun EditUserScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     
-    // 🔥 FIX: Gunakan filteredFaces sesuai update di ViewModel V.6.0
+    // 🔥 DATA OBSERVATION (Reactive dari Database)
     val allFacesState by faceViewModel.filteredFaces.collectAsStateWithLifecycle()
     val masterClasses by masterClassViewModel.masterClassesWithNames.collectAsStateWithLifecycle(initialValue = emptyList())
     
-    // 🔥 FIX: Berikan tipe eksplisit <FaceEntity?> agar smart casting di bawah bekerja
+    // Cari user berdasarkan ID dari list global
     val user: FaceEntity? = remember(allFacesState, studentId) { 
         allFacesState.find { it.studentId == studentId } 
     }
 
+    // --- FORM STATES ---
     var name by remember(user) { mutableStateOf(user?.name ?: "") }
     val selectedRombels = remember { mutableStateListOf<MasterClassWithNames>() }
     var showRombelDialog by remember { mutableStateOf(false) }
 
-    // Memuat data rombel yang sudah ada sebelumnya
+    // 🔥 FIX: Mapping Rombel Terdaftar (List<String> -> List<Object>)
     LaunchedEffect(user, masterClasses) {
         if (user != null && masterClasses.isNotEmpty() && selectedRombels.isEmpty()) {
-            val currentNames = user.className.split(",").map { it.trim() }
-            val matched = masterClasses.filter { it.className in currentNames }
+            // Karena user.enrolledClasses sudah List<String>, kita langsung filter
+            val matched = masterClasses.filter { it.className in user.enrolledClasses }
             selectedRombels.addAll(matched)
         }
     }
@@ -88,6 +86,7 @@ fun EditUserScreen(
     var isProcessing by remember { mutableStateOf(false) }
     var showFaceCapture by remember { mutableStateOf(false) }
 
+    // Load foto profil lama dari storage internal
     LaunchedEffect(user?.photoUrl) {
         val url = user?.photoUrl
         if (!url.isNullOrBlank()) {
@@ -97,6 +96,7 @@ fun EditUserScreen(
         }
     }
 
+    // Jika data tidak ditemukan (misal dihapus oleh admin lain)
     if (user == null) {
         ErrorStateScreen("User Tidak Ditemukan", "Data dengan ID $studentId tidak tersedia.", onNavigateBack)
         return
@@ -118,12 +118,14 @@ fun EditUserScreen(
                                 isProcessing = true
                                 scope.launch {
                                     try {
+                                        // Simpan foto baru jika ada, jika tidak pakai yang lama
                                         val finalPhotoPath = if (capturedBitmap != null) {
                                             withContext(Dispatchers.IO) {
                                                 PhotoStorageUtils.saveFacePhoto(context, capturedBitmap!!, studentId) 
                                             }
                                         } else user.photoUrl
 
+                                        // 🔥 UPDATE KE VIEWMODEL (MULTI-UNIT)
                                         faceViewModel.updateFaceWithMultiUnit(
                                             originalFace = user,
                                             newName = name.trim(),
@@ -132,7 +134,6 @@ fun EditUserScreen(
                                             newEmbedding = embedding,
                                             onSuccess = {
                                                 isProcessing = false
-                                                Toast.makeText(context, "Berhasil diperbarui!", Toast.LENGTH_SHORT).show()
                                                 onUpdateSuccess() 
                                             }
                                         )
@@ -145,7 +146,7 @@ fun EditUserScreen(
                                 Toast.makeText(context, "Lengkapi Nama & Rombel!", Toast.LENGTH_SHORT).show()
                             }
                         }) {
-                            Icon(Icons.Default.Check, "Simpan", tint = AzuraPrimary)
+                            Icon(Icons.Default.Check, "Simpan", tint = AzuraPrimary, modifier = Modifier.size(28.dp))
                         }
                     }
                 }
@@ -161,7 +162,7 @@ fun EditUserScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
-            // --- FOTO ---
+            // --- SECTION: FOTO PROFIL ---
             Box(contentAlignment = Alignment.Center) {
                 val img = capturedBitmap ?: currentPhotoBitmap
                 if (img != null) {
@@ -181,17 +182,19 @@ fun EditUserScreen(
                 ) { Icon(Icons.Default.PhotoCamera, null, Modifier.size(20.dp), tint = Color.White) }
             }
 
-            // --- INPUT NAMA ---
+            // --- SECTION: IDENTITAS ---
             OutlinedTextField(
-                value = name, onValueChange = { name = it },
+                value = name, 
+                onValueChange = { name = it },
                 label = { Text("Nama Lengkap") },
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp)
+                shape = RoundedCornerShape(12.dp),
+                leadingIcon = { Icon(Icons.Default.Person, null) }
             )
 
-            // --- MULTI-SELECT ROMBEL ---
+            // --- SECTION: MULTI-UNIT SELECTION ---
             Column(modifier = Modifier.fillMaxWidth()) {
-                Text("Unit / Rombel Terdaftar", style = MaterialTheme.typography.labelMedium, color = Color.Gray)
+                Text("Unit / Mata Kuliah Terdaftar", style = MaterialTheme.typography.labelMedium, color = Color.Gray)
                 Spacer(Modifier.height(8.dp))
                 FlowRow(
                     modifier = Modifier.fillMaxWidth(),
@@ -200,8 +203,8 @@ fun EditUserScreen(
                 ) {
                     AssistChip(
                         onClick = { showRombelDialog = true },
-                        label = { Text("Tambah") },
-                        leadingIcon = { Icon(Icons.Default.Add, null, Modifier.size(18.dp)) }
+                        label = { Text("Ubah Unit") },
+                        leadingIcon = { Icon(Icons.Default.Edit, null, Modifier.size(18.dp)) }
                     )
                     selectedRombels.forEach { rombel ->
                         InputChip(
@@ -220,13 +223,29 @@ fun EditUserScreen(
                 }
             }
 
-            // --- ID USER ---
+            // --- SECTION: INFO SISTEM (READ-ONLY) ---
             OutlinedTextField(
-                value = studentId, onValueChange = {}, readOnly = true, enabled = false,
-                label = { Text("ID User") }, modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp)
+                value = studentId, 
+                onValueChange = {}, 
+                readOnly = true, 
+                enabled = false,
+                label = { Text("ID Siswa (Student ID)") }, 
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                leadingIcon = { Icon(Icons.Default.Fingerprint, null) }
+            )
+            
+            Text(
+                "Biometrik wajah sudah tersimpan secara offline. " +
+                "Lakukan scan ulang jika ingin memperbarui data wajah.",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color.Gray,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(horizontal = 16.dp)
             )
         }
+
+        // --- DIALOGS ---
 
         if (showRombelDialog) {
             RombelSelectionDialog(
@@ -265,7 +284,7 @@ fun ErrorStateScreen(title: String, message: String, onNavigateBack: () -> Unit)
             Spacer(Modifier.height(8.dp))
             Text(message, textAlign = TextAlign.Center, color = Color.Gray)
             Spacer(Modifier.height(24.dp))
-            Button(onClick = onNavigateBack) { Text("KEMBALI") }
+            Button(onClick = onNavigateBack) { Text("KEMBALI KE LIST") }
         }
     }
 }
