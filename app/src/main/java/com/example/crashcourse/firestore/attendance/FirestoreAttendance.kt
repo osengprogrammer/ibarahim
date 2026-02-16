@@ -8,7 +8,6 @@ import com.example.crashcourse.utils.Constants
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.Query
-import com.google.firebase.firestore.SetOptions
 import kotlinx.coroutines.tasks.await
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -16,9 +15,8 @@ import java.time.ZoneId
 import java.util.Date
 
 /**
- * 📅 FirestoreAttendance (V.10.21 - Repository Aligned)
- * Pusat kendali data absensi di Cloud.
- * Update Log: Nama fungsi diselaraskan dengan AttendanceRepository V.10.20.
+ * 📅 FirestoreAttendance (V.20.1 - Cloud Verified)
+ * Update: Menambahkan schoolId ke constructor CheckInRecord untuk sinkronisasi Room.
  */
 object FirestoreAttendance {
 
@@ -26,45 +24,12 @@ object FirestoreAttendance {
     private val db = FirestoreCore.db
 
     // ==========================================
-    // 1️⃣ SAVE CHECK-IN
+    // 🛡️ READ-ONLY OPERATIONS (Fetching Data)
     // ==========================================
-    suspend fun saveCheckIn(record: CheckInRecord, sekolahId: String): String? {
-        return try {
-            val timeKey = record.timestamp.toString().replace(Regex("[^0-9]"), "").take(12)
-            val docId = "${record.studentId}_$timeKey"
 
-            val data: Map<String, Any?> = mapOf(
-                Constants.FIELD_FIRESTORE_ID to docId,
-                Constants.KEY_SEKOLAH_ID to sekolahId,
-                Constants.FIELD_STUDENT_ID to record.studentId,
-                Constants.KEY_NAME to record.name,
-                Constants.FIELD_STATUS to record.status,
-                Constants.PILLAR_CLASS to record.className,
-                Constants.PILLAR_GRADE to record.gradeName,
-                Constants.FIELD_ROLE to record.role,
-                Constants.FIELD_TIMESTAMP to Timestamp(
-                    Date.from(record.timestamp.atZone(ZoneId.systemDefault()).toInstant())
-                ),
-                Constants.FIELD_DATE to record.timestamp.toLocalDate().toString(),
-                Constants.FIELD_VERIFIED to record.verified,
-                Constants.FIELD_PHOTO_PATH to record.photoPath
-            )
-
-            db.collection(FirestorePaths.ATTENDANCE)
-                .document(docId)
-                .set(data, SetOptions.merge())
-                .await()
-
-            docId
-        } catch (e: Exception) {
-            Log.e(TAG, "❌ saveCheckIn failed", e)
-            null
-        }
-    }
-
-    // ==========================================
-    // 2️⃣ FETCH HISTORICAL DATA (Renamed for Repository)
-    // ==========================================
+    /**
+     * Mengambil data sejarah absensi yang sudah diverifikasi oleh Cloud.
+     */
     suspend fun fetchHistoricalData(
         sekolahId: String,
         startMillis: Long,
@@ -75,7 +40,7 @@ object FirestoreAttendance {
             val startTs = Timestamp(Date(startMillis))
             val endTs = Timestamp(Date(endMillis))
 
-            var query: Query = db.collection(FirestorePaths.ATTENDANCE)
+            var query: Query = db.collection("attendance_logs")
                 .whereEqualTo(Constants.KEY_SEKOLAH_ID, sekolahId)
                 .whereGreaterThanOrEqualTo(Constants.FIELD_TIMESTAMP, startTs)
                 .whereLessThanOrEqualTo(Constants.FIELD_TIMESTAMP, endTs)
@@ -91,13 +56,15 @@ object FirestoreAttendance {
                     val ts = doc.getTimestamp(Constants.FIELD_TIMESTAMP)?.toDate() ?: return@mapNotNull null
                     val time = LocalDateTime.ofInstant(ts.toInstant(), ZoneId.systemDefault())
 
+                    // 🔥 FIX: Menambahkan schoolId agar tidak error saat compile
                     CheckInRecord(
                         id = 0,
                         studentId = doc.getString(Constants.FIELD_STUDENT_ID) ?: "",
                         name = doc.getString(Constants.KEY_NAME) ?: "Unknown",
+                        schoolId = sekolahId, // Menggunakan parameter fungsi
                         timestamp = time,
                         status = doc.getString(Constants.FIELD_STATUS) ?: Constants.STATUS_PRESENT,
-                        verified = doc.getBoolean(Constants.FIELD_VERIFIED) ?: true,
+                        verified = true,
                         syncStatus = "SYNCED",
                         photoPath = doc.getString(Constants.FIELD_PHOTO_PATH) ?: "",
                         className = doc.getString(Constants.PILLAR_CLASS) ?: "",
@@ -112,46 +79,19 @@ object FirestoreAttendance {
         }
     }
 
-    // ==========================================
-    // 3️⃣ UPDATE STATUS (Renamed for Repository)
-    // ==========================================
-    suspend fun updateStatus(docId: String, newStatus: String) {
-        try {
-            db.collection(FirestorePaths.ATTENDANCE)
-                .document(docId)
-                .update(Constants.FIELD_STATUS, newStatus)
-                .await()
-        } catch (e: Exception) {
-            Log.e(TAG, "❌ updateStatus failed", e)
-        }
-    }
-
-    // ==========================================
-    // 4️⃣ DELETE RECORD (Renamed for Repository)
-    // ==========================================
-    suspend fun deleteRecord(firestoreId: String) {
-        try {
-            db.collection(FirestorePaths.ATTENDANCE)
-                .document(firestoreId)
-                .delete()
-                .await()
-        } catch (e: Exception) {
-            Log.e(TAG, "❌ deleteRecord failed", e)
-        }
-    }
-
-    // ==========================================
-    // 5️⃣ REALTIME TODAY
-    // ==========================================
+    /**
+     * Realtime Listener untuk dashboard hari ini.
+     */
     fun listenToTodayCheckIns(
         sekolahId: String,
         onUpdate: (List<CheckInRecord>) -> Unit
     ): ListenerRegistration {
-        val today = LocalDate.now().toString()
+        val startOfToday = Date.from(LocalDate.now().atStartOfDay(ZoneId.systemDefault()).toInstant())
+        val startTs = Timestamp(startOfToday)
 
-        return db.collection(FirestorePaths.ATTENDANCE)
+        return db.collection("attendance_logs")
             .whereEqualTo(Constants.KEY_SEKOLAH_ID, sekolahId)
-            .whereEqualTo(Constants.FIELD_DATE, today)
+            .whereGreaterThanOrEqualTo(Constants.FIELD_TIMESTAMP, startTs)
             .addSnapshotListener { snapshot, e ->
                 if (e != null) {
                     Log.e(TAG, "❌ listenToTodayCheckIns failed", e)
@@ -162,13 +102,15 @@ object FirestoreAttendance {
                     val ts = doc.getTimestamp(Constants.FIELD_TIMESTAMP)?.toDate() ?: return@mapNotNull null
                     val time = LocalDateTime.ofInstant(ts.toInstant(), ZoneId.systemDefault())
 
+                    // 🔥 FIX: Menambahkan schoolId agar tidak error saat compile
                     CheckInRecord(
                         id = 0,
                         studentId = doc.getString(Constants.FIELD_STUDENT_ID) ?: "",
                         name = doc.getString(Constants.KEY_NAME) ?: "Unknown",
+                        schoolId = sekolahId, // Menggunakan parameter fungsi
                         timestamp = time,
                         status = doc.getString(Constants.FIELD_STATUS) ?: Constants.STATUS_PRESENT,
-                        verified = doc.getBoolean(Constants.FIELD_VERIFIED) ?: true,
+                        verified = true,
                         syncStatus = "SYNCED",
                         photoPath = doc.getString(Constants.FIELD_PHOTO_PATH) ?: "",
                         className = doc.getString(Constants.PILLAR_CLASS) ?: "",

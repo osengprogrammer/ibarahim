@@ -21,9 +21,9 @@ import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
 
 /**
- * 📊 CheckInViewModel (V.7.1 - Build Success Version)
- * Mengelola riwayat absensi secara reaktif dengan sinkronisasi Multi-Tenant.
- * Menghubungkan UI Dashboard dengan Data Lokal (Room) & Cloud (Firestore).
+ * 📊 CheckInViewModel (V.20.0 - Cloud Shield Integrated)
+ * Mengelola riwayat absensi secara reaktif dengan sinkronisasi Cloud Shield.
+ * Menghubungkan UI Dashboard dengan sistem keamanan Firebase Functions.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class CheckInViewModel(application: Application) : AndroidViewModel(application) {
@@ -41,13 +41,11 @@ class CheckInViewModel(application: Application) : AndroidViewModel(application)
     // 🔐 CONTEXT OBSERVATION
     // ==========================================
     
-    // Aliran reaktif memantau ID Sekolah yang sedang aktif
     private val schoolIdFlow = userRepo.getCurrentUserFlow()
         .map { it?.schoolId }
         .distinctUntilChanged()
 
     init {
-        // Otomatis memulai sinkronisasi saat Sesi Sekolah terdeteksi
         viewModelScope.launch {
             schoolIdFlow.collect { schoolId ->
                 if (!schoolId.isNullOrBlank()) {
@@ -57,15 +55,11 @@ class CheckInViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    // ==========================================
-    // 1. 🛡️ SMART SYNC (Real-time Cloud -> Local)
-    // ==========================================
-    
     private fun startSmartSync(schoolId: String) {
         attendanceListener?.remove()
+        // Menggunakan FirestoreAttendance (Read-Only) yang sudah kita arahkan ke log Cloud
         attendanceListener = FirestoreAttendance.listenToTodayCheckIns(schoolId) { cloudRecords ->
             viewModelScope.launch {
-                // SINKRON: Mengirim List<CheckInRecord> ke Repository
                 attendanceRepo.syncAttendance(cloudRecords)
             }
         }
@@ -73,12 +67,12 @@ class CheckInViewModel(application: Application) : AndroidViewModel(application)
     }
 
     // ==========================================
-    // 2. 📅 HISTORY SYNC (Manual Pull)
+    // 📅 HISTORY SYNC (Manual Pull)
     // ==========================================
     
     fun fetchHistoricalData(startDate: LocalDate, endDate: LocalDate, classNameFilter: String?) {
         val days = ChronoUnit.DAYS.between(startDate, endDate)
-        if (days > 31) return // Limitasi penarikan data 1 bulan untuk performa
+        if (days > 31) return 
 
         viewModelScope.launch {
             _isLoadingHistory.value = true
@@ -89,15 +83,13 @@ class CheckInViewModel(application: Application) : AndroidViewModel(application)
                 val startM = startDate.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
                 val endM = endDate.atTime(LocalTime.MAX).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
 
-                // 🔥 FIXED: Menggunakan fetchHistoricalData sesuai update di AttendanceRepository
+                // Memanggil Repository yang sudah terhubung ke collection logs yang sah
                 val cloudHistory = attendanceRepo.fetchHistoricalData(sid, startM, endM)
                 
-                // Filter lokal berdasarkan kelas jika diperlukan
                 val finalHistory: List<CheckInRecord> = if (!classNameFilter.isNullOrBlank() && classNameFilter != "Semua Kelas") {
                     cloudHistory.filter { it.className.equals(classNameFilter, ignoreCase = true) }
                 } else cloudHistory
 
-                // Simpan ke database lokal (Room) agar UI terupdate secara otomatis
                 attendanceRepo.syncAttendance(finalHistory)
 
             } catch (e: Exception) {
@@ -109,15 +101,19 @@ class CheckInViewModel(application: Application) : AndroidViewModel(application)
     }
 
     // ==========================================
-    // 3. ✍️ CRUD OPERATIONS
+    // ✍️ CRUD OPERATIONS (Security Integrated)
     // ==========================================
     
-    fun saveCheckIn(record: CheckInRecord) {
+    /**
+     * saveCheckIn: Sekarang wajib membawa 'distance' dari AI
+     */
+    fun saveCheckIn(record: CheckInRecord, distance: Float) {
         viewModelScope.launch {
             try {
                 val user = userRepo.getCurrentUser() ?: return@launch
                 val sid = user.schoolId ?: return@launch
-                attendanceRepo.saveAttendance(record, sid)
+                // Memanggil repository dengan parameter rawDistance (Stainless Steel Path)
+                attendanceRepo.saveAttendance(record, sid, distance)
             } catch (e: Exception) {
                 Log.e("CheckInVM", "❌ saveCheckIn failed", e)
             }
@@ -126,23 +122,22 @@ class CheckInViewModel(application: Application) : AndroidViewModel(application)
 
     fun updateCheckInStatus(record: CheckInRecord, newStatus: String) {
         viewModelScope.launch {
+            // Memanggil fungsi update yang sudah kita tambahkan kembali di Repository
             attendanceRepo.updateStatus(record, newStatus)
         }
     }
 
     fun deleteCheckInRecord(record: CheckInRecord) {
         viewModelScope.launch {
+            // Memanggil fungsi delete yang sudah kita tambahkan kembali di Repository
             attendanceRepo.deleteRecord(record)
         }
     }
 
     // ==========================================
-    // 4. 🔍 REAKTIF SEARCH & FILTER (The Engine)
+    // 🔍 REAKTIF SEARCH & FILTER
     // ==========================================
     
-    /**
-     * Mesin pencari reaktif yang menggabungkan filter Nama, Tanggal, dan Otoritas Kelas.
-     */
     fun getScopedCheckIns(
         role: String,
         assignedClasses: List<String>,
@@ -159,25 +154,24 @@ class CheckInViewModel(application: Application) : AndroidViewModel(application)
             if (schoolId.isNullOrBlank()) {
                 flowOf(emptyList())
             } else {
-                // Menarik data dari Room berdasarkan sekolah yang aktif
                 attendanceRepo.getRecordsBySchoolFlow(schoolId).map { allRecords ->
                     allRecords.filter { record ->
-                        // 1. Filter Otoritas (Guru hanya lihat kelasnya, Admin lihat semua)
+                        // Filter Otoritas
                         val inScope = if (role == Constants.ROLE_ADMIN) true
                         else assignedClasses.any { it.equals(record.className, ignoreCase = true) }
                         
                         if (!inScope) return@filter false
 
-                        // 2. Filter Nama / ID Siswa
+                        // Filter Nama
                         val matchesName = nameFilter.isBlank() || 
                                           record.name.contains(nameFilter, ignoreCase = true) || 
                                           record.studentId.contains(nameFilter)
                         
-                        // 3. Filter Rentang Tanggal
+                        // Filter Tanggal
                         val matchesDate = (startD == null || !record.timestamp.isBefore(startD)) &&
                                           (endD == null || !record.timestamp.isAfter(endD))
                         
-                        // 4. Filter Dropdown Kelas
+                        // Filter Kelas
                         val matchesClass = if (className.isNullOrBlank() || className == "Semua Kelas") true
                                           else record.className.equals(className, ignoreCase = true)
 

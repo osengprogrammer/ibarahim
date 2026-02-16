@@ -4,11 +4,12 @@ import android.Manifest
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.util.Size
 import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.animation.*
-import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -21,17 +22,20 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.example.crashcourse.ml.FaceAnalyzer
 import com.example.crashcourse.ui.PermissionsHandler
-import com.example.crashcourse.ui.theme.* // 🚀 Import Azura Theme
-import com.google.accompanist.permissions.ExperimentalPermissionsApi
+import com.example.crashcourse.ui.theme.* import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.rememberPermissionState
 import com.google.accompanist.permissions.isGranted
 import java.util.concurrent.Executors
-import androidx.compose.foundation.BorderStroke // 🚀 Pastikan ada
 
+/**
+ * 👁️ FaceScanner V.18.6 - Final Eagle Eye Mode
+ * Fix: Unresolved reference 'close' & optimized for long-distance (50cm).
+ */
 @OptIn(ExperimentalPermissionsApi::class)
 @Composable
 fun FaceScanner(
@@ -46,7 +50,7 @@ fun FaceScanner(
     var showLowLightWarning by remember { mutableStateOf(false) }
     var camera by remember { mutableStateOf<Camera?>(null) }
 
-    // 🚀 CONTROL ISO/EXPOSURE (Optimized)
+    // 🚀 CONTROL ISO/EXPOSURE
     LaunchedEffect(camera, enableLightBoost) {
         camera?.cameraControl?.let { control ->
             val exposureState = camera?.cameraInfo?.exposureState
@@ -62,8 +66,15 @@ fun FaceScanner(
         val executor = remember { Executors.newSingleThreadExecutor() }
         val mainHandler = remember { Handler(Looper.getMainLooper()) }
 
-        DisposableEffect(Unit) { onDispose { executor.shutdown() } }
+        // ✅ PEMBERSIHAN EXECUTOR
+        DisposableEffect(Unit) { 
+            onDispose { 
+                executor.shutdown() 
+            } 
+        }
 
+        // ✅ ANALYZER INITIALIZATION
+        // Kita gunakan FaceAnalyzer spesifik agar fungsi .close() terlihat oleh compiler
         val analyzer = remember {
             FaceAnalyzer { result ->
                 mainHandler.post { 
@@ -72,27 +83,50 @@ fun FaceScanner(
                 }
             }
         }
-        DisposableEffect(Unit) { onDispose { analyzer.close() } }
 
-        val previewView = remember { PreviewView(context).apply { scaleType = PreviewView.ScaleType.FILL_CENTER } }
+        // ✅ PEMBERSIHAN ANALYZER (Fix: Unresolved reference close)
+        // Fungsi ini penting agar ML Kit detector tertutup saat user pindah layar
+        DisposableEffect(analyzer) {
+            onDispose {
+                analyzer.close()
+            }
+        }
+
+        val previewView = remember { 
+            PreviewView(context).apply { 
+                scaleType = PreviewView.ScaleType.FILL_CENTER 
+            } 
+        }
 
         LaunchedEffect(cameraPermissionState.status, useBackCamera) {
             if (cameraPermissionState.status.isGranted) {
                 try {
                     val cameraProvider = ProcessCameraProvider.getInstance(context).get()
-                    val preview = Preview.Builder().build().also { it.setSurfaceProvider(previewView.surfaceProvider) }
+                    
+                    // 🚀 EAGLE EYE RESOLUTION: 720p
+                    val preview = Preview.Builder()
+                        .setTargetResolution(Size(720, 1280)) 
+                        .build()
+                        .also { it.setSurfaceProvider(previewView.surfaceProvider) }
                     
                     val analysis = ImageAnalysis.Builder()
+                        .setTargetResolution(Size(720, 1280)) 
                         .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                         .build()
                         .also { it.setAnalyzer(executor, analyzer) }
 
                     val selector = if (useBackCamera) CameraSelector.DEFAULT_BACK_CAMERA else CameraSelector.DEFAULT_FRONT_CAMERA
+                    
                     cameraProvider.unbindAll()
-                    camera = cameraProvider.bindToLifecycle(lifecycleOwner, selector, preview, analysis)
+                    camera = cameraProvider.bindToLifecycle(
+                        lifecycleOwner, 
+                        selector, 
+                        preview, 
+                        analysis
+                    )
                     
                 } catch (e: Exception) {
-                    Log.e("FaceScanner", "Camera binding failed", e)
+                    Log.e("FaceScanner", "Eagle Eye binding failed", e)
                 }
             }
         }
@@ -100,7 +134,7 @@ fun FaceScanner(
         Box(Modifier.fillMaxSize()) { 
             AndroidView(factory = { previewView }, modifier = Modifier.fillMaxSize()) 
             
-            // 🚀 AZURA STYLE: Low Light Warning Overlay
+            // 🚀 AZURA STYLE: Low Light Warning
             AnimatedVisibility(
                 visible = showLowLightWarning && !enableLightBoost,
                 enter = fadeIn() + slideInVertically { it / 2 },
@@ -117,7 +151,6 @@ fun FaceScanner(
                         modifier = Modifier.padding(24.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        // Pakai Azura Error/Yellow untuk perhatian
                         Icon(
                             imageVector = Icons.Default.Warning,
                             contentDescription = "Low Light",
@@ -126,7 +159,6 @@ fun FaceScanner(
                         )
                         Spacer(modifier = Modifier.height(16.dp))
                         
-                        // Gunakan Typography Azura
                         Text(
                             text = "CAHAYA MINIM",
                             style = MaterialTheme.typography.titleMedium.copy(
@@ -135,11 +167,11 @@ fun FaceScanner(
                             )
                         )
                         Text(
-                            text = "Aktifkan Light Boost untuk scan lebih cepat",
+                            text = "Gunakan Light Boost agar AI melihat lebih jelas",
                             style = MaterialTheme.typography.bodySmall.copy(
                                 color = Color.White.copy(alpha = 0.7f)
                             ),
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                            textAlign = TextAlign.Center
                         )
                     }
                 }

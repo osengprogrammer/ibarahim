@@ -5,18 +5,26 @@ import androidx.room.Index
 import androidx.room.PrimaryKey
 import java.time.LocalDateTime
 
+/**
+ * 📊 CheckInRecord (V.20.5 - Aligned)
+ */
 @Entity(
-    tableName = "attendance_records", // 🚀 SINKRON: Gunakan nama ini
-    indices = [Index(value = ["studentId"]), Index(value = ["syncStatus"])]
+    tableName = "attendance_records",
+    indices = [
+        Index(value = ["studentId"]), 
+        Index(value = ["schoolId"]), 
+        Index(value = ["syncStatus"])
+    ]
 )
 data class CheckInRecord(
     @PrimaryKey(autoGenerate = true)
     val id: Int = 0,
     val studentId: String,
     val name: String,
+    val schoolId: String, // ✅ Pastikan namanya 'schoolId'
     val timestamp: LocalDateTime,
-    val status: String, // PRESENT, LATE, ABSENT
-    val className: String, // Konteks Matkul saat scan (Socio/Translation)
+    val status: String, 
+    val className: String,
     val gradeName: String? = null,
     val role: String? = null,
     val firestoreId: String? = null,

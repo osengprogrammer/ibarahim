@@ -4,35 +4,31 @@ import android.content.Context
 import com.example.crashcourse.db.FaceCache
 import com.example.crashcourse.db.FaceEntity
 import com.example.crashcourse.ml.nativeutils.NativeMath
+import com.example.crashcourse.utils.BiometricConfig // 🚀 Pusat Komando Keamanan
 
 /**
- * 🧠 FaceRecognitionEngine (V.15.8 - Guarded Eagle Edition)
+ * 🧠 FaceRecognitionEngine (V.19.0 - Unified Config)
  * Tugas: Menghitung jarak matematis dan melakukan filtrasi awal (Rejection).
- * * Versi ini memastikan tidak ada "Best Guess" yang konyol (seperti Obama jadi Maksum)
- * dengan menerapkan Hard Threshold di level Engine.
+ * Sekarang tersinkronisasi 100% dengan BiometricConfig Azura Tech.
  */
 class FaceRecognitionEngine(private val context: Context) {
 
     companion object {
-        // 🛡️ DUPLICATE_THRESHOLD: Digunakan saat registrasi (Admin)
-        private const val DUPLICATE_THRESHOLD = 0.22f   
-        
-        // 🛡️ REJECTION_THRESHOLD: Batas maksimal toleransi biometrik.
-        // Jika jarak > 0.45, maka itu dipastikan BUKAN orang yang sama.
-        private const val REJECTION_THRESHOLD = 0.45f
-        
         private const val TAG = "FaceRecognitionEngine"
     }
 
     /**
      * 1️⃣ DETEKSI DUPLIKAT (Anti-Fraud saat Registrasi)
+     * Mencegah satu orang didaftarkan dengan dua nama berbeda.
      */
     fun detectDuplicate(newEmbedding: FloatArray): String? {
         val allFaces = FaceCache.getFaces()
         
         for (face in allFaces) {
             val distance = NativeMath.cosineDistance(newEmbedding, face.embedding)
-            if (distance < DUPLICATE_THRESHOLD) {
+            
+            // ✅ Menggunakan konstanta global: DUPLICATE_THRESHOLD (0.22001f)
+            if (distance < BiometricConfig.DUPLICATE_THRESHOLD) {
                 return face.name
             }
         }
@@ -41,7 +37,7 @@ class FaceRecognitionEngine(private val context: Context) {
 
     /**
      * 2️⃣ RECOGNITION (Saat Check-in)
-     * Mencari kecocokan terbaik dengan batasan keamanan (Hard Rejection).
+     * Mencari kecocokan terbaik dengan batasan keamanan ketat.
      */
     fun recognize(embedding: FloatArray): MatchResult {
         val allFaces = FaceCache.getFaces()
@@ -50,7 +46,7 @@ class FaceRecognitionEngine(private val context: Context) {
         var bestMatch: FaceEntity? = null
         var bestDist = Float.MAX_VALUE
 
-        // Pencarian linear di dalam cache RAM
+        // Pencarian linear di dalam cache RAM (L2 Normalized)
         for (face in allFaces) {
             val dist = NativeMath.cosineDistance(embedding, face.embedding)
             if (dist < bestDist) {
@@ -62,19 +58,21 @@ class FaceRecognitionEngine(private val context: Context) {
         return when {
             bestMatch == null -> MatchResult.Unknown
             
-            // 🔥 HARD REJECTION: Mencegah 'Nearest Neighbor Fallacy'
-            // Jika Obama masuk, jaraknya mungkin 0.6. Karena 0.6 > 0.45, 
-            // Engine akan lapor 'Unknown', bukan Maksum.
-            bestDist > REJECTION_THRESHOLD -> MatchResult.Unknown
+            /**
+             * 🔥 HARD REJECTION: Mencegah 'Nearest Neighbor Fallacy'
+             * Jika jarak > ENGINE_REJECTION_THRESHOLD (0.42001f), 
+             * maka Engine akan langsung melapor 'Unknown'.
+             */
+            bestDist > BiometricConfig.ENGINE_REJECTION_THRESHOLD -> MatchResult.Unknown
             
-            // Lulus sensor awal, kirim ke ViewModel untuk verifikasi stabilitas/kedip
+            // Lulus filter awal, kirim ke ViewModel untuk verifikasi Stabilitas & Kedip
             else -> MatchResult.Success(bestMatch, bestDist)
         }
     }
 }
 
 /**
- * Representasi hasil pencocokan wajah yang lebih ketat.
+ * Representasi hasil pencocokan wajah yang sinkron dengan alur ViewModel.
  */
 sealed class MatchResult {
     object NoData : MatchResult()

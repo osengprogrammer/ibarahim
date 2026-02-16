@@ -5,113 +5,126 @@ import android.util.Log
 import com.example.crashcourse.db.AppDatabase
 import com.example.crashcourse.db.CheckInRecord
 import com.example.crashcourse.firestore.FirestoreAttendance
+import com.example.crashcourse.util.NativeKeyStore
+import com.google.firebase.functions.FirebaseFunctions
+import com.google.firebase.functions.ktx.functions
+import com.google.firebase.ktx.Firebase
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import java.time.LocalDateTime
 
 /**
- * 📊 AttendanceRepository (V.10.20 - Build Success Ready)
- * Jantung manajemen data absensi AzuraTech.
- * Menghubungkan Room (Lokal) dan Firestore (Cloud).
+ * 📊 AttendanceRepository (V.20.3 - Stainless Steel Edition)
+ * Jantung manajemen data AzuraTech.
+ * Update: Menambahkan schoolId ke record & Verbose Debugging.
  */
 class AttendanceRepository(application: Application) {
     private val db = AppDatabase.getInstance(application)
     private val checkInDao = db.checkInRecordDao()
+    private val functions: FirebaseFunctions = Firebase.functions("us-central1")
 
     companion object {
-        private const val TAG = "AttendanceRepo"
-        private const val CHECK_IN_COOLDOWN_SEC = 30L
+        private const val TAG = "AzuraRepo"
+        private const val CHECK_IN_COOLDOWN_SEC = 20L
     }
 
     // ==========================================
-    // 🔍 READ OPERATIONS
+    // ✍️ WRITE & SECURE CLOUD SYNC
     // ==========================================
 
-    fun getRecordsBySchoolFlow(schoolId: String): Flow<List<CheckInRecord>> =
-        checkInDao.getAllRecordsBySchoolFlow(schoolId)
-
-    suspend fun getLastRecordForClass(studentId: String, className: String): CheckInRecord? = 
-        withContext(Dispatchers.IO) { checkInDao.getLastRecordForClass(studentId, className) }
-
-    // ==========================================
-    // ✍️ WRITE & SYNC OPERATIONS
-    // ==========================================
-
-    suspend fun saveAttendance(record: CheckInRecord, schoolId: String): String = withContext(Dispatchers.IO) {
+    /**
+     * saveAttendance: Menyimpan ke Cloud via Firebase Functions.
+     * Jika gagal (offline), akan otomatis tersimpan ke Room dengan status PENDING.
+     */
+    suspend fun saveAttendance(record: CheckInRecord, schoolId: String, rawDistance: Float): String = withContext(Dispatchers.IO) {
         try {
+            // 1. Cek Cooldown Lokal (Cegah double scan dalam waktu singkat)
             val lastRecord = checkInDao.getLastRecordForClass(record.studentId, record.className)
             if (lastRecord != null && lastRecord.timestamp.isAfter(LocalDateTime.now().minusSeconds(CHECK_IN_COOLDOWN_SEC))) {
+                Log.w(TAG, "⏳ Cooldown active for ${record.name}")
                 return@withContext "COOLDOWN"
             }
 
-            // 1. Simpan Lokal
-            val localId = checkInDao.insert(record)
+            // 2. Ambil Kunci Security dari JNI/C++
+            val isoKey = NativeKeyStore.getIsoKey()
+
+            // 3. Persiapkan Payload (Verbose Logging untuk Debugging)
+            val data = hashMapOf(
+                "studentId" to record.studentId,
+                "name" to record.name,
+                "distance" to rawDistance, 
+                "isoKey" to isoKey,       
+                "className" to record.className,
+                "grade" to record.gradeName,
+                "schoolId" to schoolId
+            )
             
-            // 2. Upload Cloud (Panggil Firestore)
-            val firestoreId = FirestoreAttendance.saveCheckIn(record, schoolId)
+            Log.d(TAG, "🚀 Menembak Cloud Function: $data")
+
+            // 4. Panggil Cloud Function 'secureCheckIn'
+            val result = functions
+                .getHttpsCallable("secureCheckIn")
+                .call(data)
+                .await()
+
+            // 5. Validasi Response Server
+            val responseData = result.data as? Map<*, *>
+            val status = responseData?.get("status") as? String
             
-            if (firestoreId != null) {
-                checkInDao.markAsSynced(localId.toInt(), firestoreId)
-                return@withContext "SUCCESS"
+            return@withContext if (status == "SUCCESS") {
+                Log.i(TAG, "✅ Cloud verified: ${record.name}")
+                checkInDao.insert(record.copy(syncStatus = "SYNCED", schoolId = schoolId))
+                "SUCCESS"
             } else {
-                return@withContext "SAVED_OFFLINE"
+                Log.e(TAG, "❌ Server rejected record: $status")
+                "SERVER_REJECTED"
             }
+
         } catch (e: Exception) {
-            Log.e(TAG, "Error saving attendance", e)
-            return@withContext e.message ?: "UNKNOWN_ERROR"
+            // 6. Jalur Offline (Stainless Steel Path)
+            Log.e(TAG, "🚨 Cloud Shield Error (Mode Offline aktif): ${e.message}")
+            return@withContext try {
+                // Tetap simpan ke Lokal meskipun internet mati
+                checkInDao.insert(record.copy(syncStatus = "PENDING", schoolId = schoolId))
+                "SAVED_OFFLINE"
+            } catch (localError: Exception) {
+                Log.e(TAG, "❌ Database Lokal Error: ${localError.message}")
+                "DATABASE_ERROR"
+            }
         }
     }
 
-    suspend fun syncAttendance(records: List<CheckInRecord>) = withContext(Dispatchers.IO) {
-        try {
-            checkInDao.insertAll(records)
-        } catch (e: Exception) { 
-            Log.e(TAG, "❌ syncAttendance failed", e) 
-        }
-    }
+    // ==========================================
+    // 🔍 READ & MAINTENANCE
+    // ==========================================
+
+    /**
+     * Membaca riwayat berdasarkan schoolId secara reaktif.
+     */
+    fun getRecordsBySchoolFlow(schoolId: String): Flow<List<CheckInRecord>> =
+        checkInDao.getRecordsBySchoolDirect(schoolId)
 
     suspend fun fetchHistoricalData(schoolId: String, startM: Long, endM: Long): List<CheckInRecord> {
         return try {
-            // 🔥 Error line 80: Resolve ini dengan update FirestoreAttendance.kt
             FirestoreAttendance.fetchHistoricalData(schoolId, startM, endM)
         } catch (e: Exception) {
-            Log.e(TAG, "❌ fetchHistoricalData failed", e)
+            Log.e(TAG, "❌ Gagal tarik riwayat cloud", e)
             emptyList()
         }
     }
 
-    // ==========================================
-    // 🛠️ CRUD HANDLERS (Update & Delete)
-    // ==========================================
-
     suspend fun updateStatus(record: CheckInRecord, newStatus: String) = withContext(Dispatchers.IO) {
-        try {
-            // 1. Update Room (Lokal)
-            checkInDao.updateStatusById(record.id, newStatus)
-            
-            // 2. Update Cloud (Panggil Firestore)
-            record.firestoreId?.let { fsId ->
-                // 🔥 Error line 98: Resolve ini dengan update FirestoreAttendance.kt
-                FirestoreAttendance.updateStatus(fsId, newStatus)
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "❌ updateStatus failed", e)
-        }
+        checkInDao.updateStatusById(record.id, newStatus)
     }
 
     suspend fun deleteRecord(record: CheckInRecord) = withContext(Dispatchers.IO) {
-        try {
-            // 1. Hapus Lokal
-            checkInDao.delete(record)
-            
-            // 2. Hapus Cloud (Panggil Firestore)
-            record.firestoreId?.let { fsId ->
-                // 🔥 Error line 112: Resolve ini dengan update FirestoreAttendance.kt
-                FirestoreAttendance.deleteRecord(fsId)
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "❌ deleteRecord failed", e)
-        }
+        checkInDao.delete(record)
+    }
+
+    suspend fun syncAttendance(records: List<CheckInRecord>) = withContext(Dispatchers.IO) {
+        // Pastikan schoolId ikut tersimpan saat sinkronisasi massal
+        checkInDao.insertAll(records)
     }
 }

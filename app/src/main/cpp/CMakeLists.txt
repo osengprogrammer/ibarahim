@@ -18,6 +18,7 @@ add_library(
 
     # Provides a relative path to your source file(s).
     native_image.cpp
+    security_logic.cpp
 )
 
 # Searches for a specified prebuilt library and stores the path as a

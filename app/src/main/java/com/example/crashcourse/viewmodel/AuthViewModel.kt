@@ -22,6 +22,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.tasks.await
 import java.util.*
 
+/**
+ * 🏛️ AuthViewModel (V.18.5 - Full Restoration & Robust Sync)
+ * Fix: Unresolved reference 'register' & 'name'.
+ */
 class AuthViewModel(application: Application) : AndroidViewModel(application) {
 
     private val auth: FirebaseAuth = Firebase.auth
@@ -66,7 +70,7 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // --- REGISTER LOGIC ---
+    // --- 🛡️ RESTORED REGISTER LOGIC ---
     fun register(email: String, pass: String, schoolNameInput: String) {
         viewModelScope.launch {
             _authState.value = AuthState.Loading("Memproses...")
@@ -129,11 +133,95 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
                         val newId = migrateUserDocument(normalizedEmail, uid)
                         startListeningToUserStatus(newId)
                     } else {
-                        _authState.value = AuthState.Error("Profil tidak ditemukan.")
+                        _authState.value = AuthState.Error("Profil Cloud tidak ditemukan.")
                     }
                 }
             } catch (e: Exception) {
-                _authState.value = AuthState.Error("Identifikasi Gagal.")
+                Log.e("AuthVM", "Identify Error", e)
+                _authState.value = AuthState.Error("Gagal Identifikasi Profil.")
+            }
+        }
+    }
+
+    private fun startListeningToUserStatus(docId: String) {
+        statusListener?.remove()
+        statusListener = FirebaseFirestore.getInstance()
+            .collection("users").document(docId)
+            .addSnapshotListener { snapshot, e ->
+                if (e != null) {
+                    _authState.value = AuthState.Error("Koneksi Cloud terputus.")
+                    return@addSnapshotListener
+                }
+                if (snapshot == null || !snapshot.exists()) {
+                    _authState.value = AuthState.Error("Dokumen User dihapus.")
+                    return@addSnapshotListener
+                }
+                processUserSnapshot(snapshot, auth.currentUser?.uid ?: docId)
+            }
+    }
+
+    private fun processUserSnapshot(snapshot: DocumentSnapshot, uid: String) {
+        try {
+            val profile = snapshot.toObject(UserProfile::class.java)
+            if (profile == null) {
+                _authState.value = AuthState.Error("Format Data Cloud tidak valid.")
+                return
+            }
+            
+            val rawStatus = snapshot.getString("status") ?: ""
+            val boolActive = snapshot.getBoolean("isActive") ?: false
+            val isRegistered = snapshot.getBoolean("isRegistered") ?: false
+            val isAccountActive = rawStatus.equals("ACTIVE", ignoreCase = true) || boolActive || isRegistered
+
+            val cloudDeviceId = snapshot.getString("device_id") ?: ""
+            if (cloudDeviceId.isNotEmpty() && cloudDeviceId != currentDeviceId) {
+                _authState.value = AuthState.Error("Akun aktif di HP lain.")
+                return
+            }
+
+            if (isAccountActive) {
+                val expiry = snapshot.getTimestamp("expiry_date")?.toDate()?.time
+                    ?: (System.currentTimeMillis() + 31536000000L)
+                syncUserToRoom(profile, uid, expiry, isAccountActive)
+            } else {
+                _authState.value = AuthState.StatusWaiting("Menunggu persetujuan Admin.")
+            }
+        } catch (e: Exception) {
+            Log.e("AuthVM", "Snapshot Error", e)
+            _authState.value = AuthState.Error("Gagal memproses profil.")
+        }
+    }
+
+    private fun syncUserToRoom(profile: UserProfile, uid: String, expiryMillis: Long, active: Boolean) {
+        syncJob?.cancel()
+        syncJob = viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val userEntity = UserEntity(
+                    uid = uid,
+                    // ✅ FIXED: Menggunakan email sebagai fallback jika bukan ADMIN
+                    name = if (profile.role == "ADMIN") profile.schoolName else profile.email,
+                    schoolId = profile.schoolId,
+                    role = profile.role,
+                    isActive = active,
+                    expiryMillis = expiryMillis,
+                    assignedClasses = profile.assigned_classes,
+                    lastSync = System.currentTimeMillis()
+                )
+                
+                database.userDao().replaceCurrentUser(userEntity)
+
+                withContext(Dispatchers.Main) {
+                    _authState.value = AuthState.Active(
+                        uid = uid, email = profile.email, role = profile.role,
+                        schoolName = profile.schoolName, schoolId = profile.schoolId,
+                        expiryMillis = expiryMillis, assignedClasses = profile.assigned_classes
+                    )
+                }
+            } catch (e: Exception) {
+                Log.e("AuthVM", "Room Storage Error", e)
+                withContext(Dispatchers.Main) {
+                    _authState.value = AuthState.Error("Gagal menyimpan data lokal.")
+                }
             }
         }
     }
@@ -150,78 +238,6 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
         return newUid
     }
 
-    private fun startListeningToUserStatus(docId: String) {
-        statusListener?.remove()
-        statusListener = FirebaseFirestore.getInstance()
-            .collection("users").document(docId)
-            .addSnapshotListener { snapshot, e ->
-                if (e != null || snapshot == null || !snapshot.exists()) return@addSnapshotListener
-                processUserSnapshot(snapshot, auth.currentUser?.uid ?: docId)
-            }
-    }
-
-    private fun processUserSnapshot(snapshot: DocumentSnapshot, uid: String) {
-        try {
-            val profile = snapshot.toObject(UserProfile::class.java) ?: return
-            
-            // 🔥 LOGIKA "SAPU JAGAT" UNTUK STATUS ACTIVE
-            val rawStatus = snapshot.getString("status") ?: ""
-            val boolActive = snapshot.getBoolean("isActive") ?: false
-            val isRegistered = snapshot.getBoolean("isRegistered") ?: false
-            
-            // Bypass verifikasi jika status ACTIVE (String) atau isActive (Boolean)
-            val isAccountActive = rawStatus.equals("ACTIVE", ignoreCase = true) || boolActive || isRegistered
-
-            Log.d("AuthVM", "🔍 Status Check: String=$rawStatus, Bool=$boolActive, Result=$isAccountActive")
-
-            val cloudDeviceId = snapshot.getString("device_id") ?: ""
-            if (cloudDeviceId.isNotEmpty() && cloudDeviceId != currentDeviceId) {
-                _authState.value = AuthState.Error("Akun aktif di HP lain.")
-                logout()
-                return
-            }
-
-            if (isAccountActive) {
-                val expiry = snapshot.getTimestamp("expiry_date")?.toDate()?.time
-                    ?: (System.currentTimeMillis() + 31536000000L)
-                syncUserToRoom(profile, uid, expiry, isAccountActive)
-            } else {
-                _authState.value = AuthState.StatusWaiting("Menunggu persetujuan Admin.")
-            }
-        } catch (e: Exception) {
-            _authState.value = AuthState.Error("Gagal memproses profil.")
-        }
-    }
-
-    private fun syncUserToRoom(profile: UserProfile, uid: String, expiryMillis: Long, active: Boolean) {
-        syncJob?.cancel()
-        syncJob = viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val userEntity = UserEntity(
-                    uid = uid,
-                    name = if (profile.role == "ADMIN") profile.schoolName else profile.email,
-                    schoolId = profile.schoolId,
-                    role = profile.role,
-                    isActive = active,
-                    expiryMillis = expiryMillis,
-                    assignedClasses = profile.assigned_classes,
-                    lastSync = System.currentTimeMillis()
-                )
-                database.userDao().replaceCurrentUser(userEntity)
-
-                withContext(Dispatchers.Main) {
-                    _authState.value = AuthState.Active(
-                        uid = uid, email = profile.email, role = profile.role,
-                        schoolName = profile.schoolName, schoolId = profile.schoolId,
-                        expiryMillis = expiryMillis, assignedClasses = profile.assigned_classes
-                    )
-                }
-            } catch (e: Exception) {
-                Log.e("AuthVM", "Room Error", e)
-            }
-        }
-    }
-
     fun logout() {
         statusListener?.remove()
         _authState.value = AuthState.LoggedOut
@@ -232,6 +248,6 @@ class AuthViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun handleAuthError(e: Exception) {
-        _authState.value = AuthState.Error(e.message ?: "Auth Gagal.")
+        _authState.value = AuthState.Error(e.message ?: "Otentikasi Gagal.")
     }
 }

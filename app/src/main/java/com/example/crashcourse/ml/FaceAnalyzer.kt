@@ -10,16 +10,16 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.unit.IntSize
 import com.example.crashcourse.utils.toSquareRect 
-import com.example.crashcourse.ml.nativeutils.NativeMath
-import com.example.crashcourse.ml.nativeutils.BitmapUtils // Pastikan utility ini ada
+import com.example.crashcourse.utils.BiometricConfig // 🚀 Import Pusat Komando
+import com.example.crashcourse.ml.nativeutils.BitmapUtils 
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.face.FaceDetection
 import com.google.mlkit.vision.face.FaceDetectorOptions
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * 👁️ FaceAnalyzer V.15.0 - Eagle Eye Edition
- * Mata utama Azura Tech yang disetel untuk presisi biometrik maksimal.
+ * 👁️ FaceAnalyzer V.19.0 - Azura Stainless Steel
+ * Update: Menghapus redundansi normalisasi & sinkronisasi pusat komando.
  */
 @Suppress("UnsafeOptInUsageError")
 class FaceAnalyzer(
@@ -29,12 +29,9 @@ class FaceAnalyzer(
     companion object {
         private const val TAG = "FaceAnalyzer"
         private const val FACE_NET_INPUT_SIZE = 112
-        
-        // 💡 Toleransi cahaya rendah (Luminosity)
         private const val MIN_LUMINOSITY = 30.0 
-        
-        // 💡 Jarak pandang: Wajah hanya perlu mengisi 5% layar agar diproses
-        private const val MIN_FACE_SIZE_PERCENT = 0.05f 
+        // Menggunakan nilai dari config agar sensitivitas jarak seragam
+        private const val MIN_FACE_SIZE_PERCENT = 0.02f 
     }
 
     data class FaceResult(
@@ -55,7 +52,6 @@ class FaceAnalyzer(
             .build()
     )
 
-    // State untuk UI Monitoring (Radar HUD)
     var faceBounds by mutableStateOf<List<Rect>>(emptyList())
         private set
     var imageSize by mutableStateOf(IntSize(0, 0))
@@ -66,10 +62,16 @@ class FaceAnalyzer(
     private val isProcessing = AtomicBoolean(false)
     private var lastProcessTime = 0L
 
+    fun close() {
+        try {
+            detector.close()
+        } catch (e: Exception) {
+            Log.e(TAG, "Gagal menutup detector", e)
+        }
+    }
+
     override fun analyze(imageProxy: ImageProxy) {
         val currentTime = System.currentTimeMillis()
-        
-        // Throttling: Menjaga FPS tetap stabil di angka ~12 FPS agar HP tidak panas
         if (isProcessing.get() || (currentTime - lastProcessTime < 80)) {
             imageProxy.close()
             return
@@ -83,7 +85,6 @@ class FaceAnalyzer(
         isProcessing.set(true)
         lastProcessTime = currentTime
 
-        // 1. Monitor Cahaya
         val luminosity = calculateLuminosity(mediaImage)
         val lowLight = luminosity < MIN_LUMINOSITY
         isLowLightState = lowLight
@@ -111,24 +112,19 @@ class FaceAnalyzer(
 
                 for (face in faces) {
                     val originalBounds = face.boundingBox
-
-                    // 🛡️ Filter Jarak: Cek apakah wajah cukup besar di layar
                     val faceArea = originalBounds.width() * originalBounds.height()
                     if (faceArea < (width * height * MIN_FACE_SIZE_PERCENT)) continue
 
-                    // 🛡️ Filter Tepi: Abaikan wajah yang terpotong bingkai kamera
-                    val margin = 10
+                    val margin = 5
                     if (originalBounds.left < margin || originalBounds.top < margin || 
                         originalBounds.right > width - margin || originalBounds.bottom > height - margin) continue
 
-                    // Probabilitas mata untuk Liveness Check (Kedip)
                     primaryLeftEye = face.leftEyeOpenProbability
                     primaryRightEye = face.rightEyeOpenProbability
 
-                    // ✅ STAINLESS STEEL CROP: Ubah ke Kotak Sempurna + Padding 25%
-                    val squareBounds = originalBounds.toSquareRect(width, height)
+                    // ✅ Sinkronisasi dengan BiometricConfig.DEFAULT_FACE_PADDING (0.15f)
+                    val squareBounds = originalBounds.toSquareRect(width, height, paddingFactor = BiometricConfig.DEFAULT_FACE_PADDING)
 
-                    // Preprocessing via JNI/C++ (Resize & RGB Conversion)
                     val buffer = BitmapUtils.preprocessFace(
                         image       = mediaImage,
                         boundingBox = squareBounds,
@@ -136,28 +132,14 @@ class FaceAnalyzer(
                         outputSize  = FACE_NET_INPUT_SIZE
                     )
 
-                    // AI Inference (MobileFaceNet)
-                    val rawEmbedding = FaceRecognizer.recognizeFace(buffer)
-                    
-                    // ✅ THE HOLY GRAIL: L2 Normalization
-                    // Ini kunci agar jarak Cosine/Euclidean tidak membengkak ke 0.5+
-                    val normalizedEmbedding = NativeMath.normalize(rawEmbedding.clone())
+                    // 🚀 FIXED: FaceRecognizer SUDAH melakukan normalisasi di dalamnya.
+                    // Jangan panggil NativeMath.normalize lagi di sini agar data murni.
+                    val embedding = FaceRecognizer.recognizeFace(buffer)
 
-                    results.add(originalBounds to normalizedEmbedding)
+                    results.add(originalBounds to embedding)
                 }
 
-                // Kirim paket data lengkap ke ViewModel
-                onResult(
-                    FaceResult(
-                        bounds = faceBounds,
-                        imageSize = imageSize,
-                        rotation = rotation,
-                        embeddings = results,
-                        leftEyeOpenProb = primaryLeftEye,
-                        rightEyeOpenProb = primaryRightEye,
-                        isLowLight = false
-                    )
-                )
+                onResult(FaceResult(faceBounds, imageSize, rotation, results, primaryLeftEye, primaryRightEye, false))
             }
             .addOnFailureListener { e ->
                 Log.e(TAG, "Face detection failed", e)
@@ -168,8 +150,6 @@ class FaceAnalyzer(
                 isProcessing.set(false)
             }
     }
-
-    fun close() = detector.close()
 
     private fun calculateLuminosity(image: Image): Double {
         val plane = image.planes[0]

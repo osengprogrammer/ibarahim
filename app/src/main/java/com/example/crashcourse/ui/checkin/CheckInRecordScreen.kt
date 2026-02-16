@@ -2,11 +2,11 @@ package com.example.crashcourse.ui.checkin
 
 import android.widget.Toast
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable // ✅ Import untuk interaksi list
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape // ✅ Import untuk radius sudut
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
@@ -18,7 +18,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp // ✅ Import untuk satuan teks
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.crashcourse.db.CheckInRecord
@@ -32,8 +32,8 @@ import java.time.LocalDate
 import java.time.LocalDateTime
 
 /**
- * 📊 Azura Tech Attendance History Screen
- * Menghubungkan database Room lokal dengan sinkronisasi Firestore.
+ * 📊 Azura Tech Attendance History Screen (V.20.2)
+ * Update: Fix parameter 'schoolId' pada Manual Check-In.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -58,7 +58,6 @@ fun CheckInRecordScreen(
     var recordToEdit by remember { mutableStateOf<CheckInRecord?>(null) }
     var recordToDelete by remember { mutableStateOf<CheckInRecord?>(null) }
 
-    // Mengambil data secara reaktif berdasarkan filter Many-to-Many
     val records by checkInVM.getScopedCheckIns(
         role = authState.role,
         assignedClasses = authState.assignedClasses,
@@ -95,16 +94,18 @@ fun CheckInRecordScreen(
             )
         },
         floatingActionButton = {
-            FloatingActionButton(
-                onClick = { showManualDialog = true },
-                containerColor = AzuraPrimary,
-                contentColor = Color.White
-            ) { Icon(Icons.Default.Add, contentDescription = "Input Manual") }
+            if (isAdmin) {
+                FloatingActionButton(
+                    onClick = { showManualDialog = true },
+                    containerColor = AzuraPrimary,
+                    contentColor = Color.White
+                ) { Icon(Icons.Default.Add, contentDescription = "Input Manual") }
+            }
         }
     ) { padding ->
         Column(modifier = Modifier.padding(padding).fillMaxSize().background(Color(0xFFF5F5F5))) {
             
-            // --- SECTION: FILTER ---
+            // UI Filter Card (Search, Class, Date)
             Card(
                 modifier = Modifier.fillMaxWidth().padding(16.dp),
                 colors = CardDefaults.cardColors(containerColor = Color.White),
@@ -133,16 +134,10 @@ fun CheckInRecordScreen(
                 }
             }
 
-            // --- SECTION: LIST DATA ---
             if (records.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(
-                            imageVector = Icons.Default.Inbox, 
-                            contentDescription = null, 
-                            modifier = Modifier.size(64.dp), 
-                            tint = Color.LightGray
-                        )
+                        Icon(Icons.Default.Inbox, null, Modifier.size(64.dp), Color.LightGray)
                         Spacer(Modifier.height(8.dp))
                         Text("Tidak ada data ditemukan", color = Color.Gray)
                     }
@@ -172,9 +167,11 @@ fun CheckInRecordScreen(
                 masterClasses = masterClasses,
                 onDismiss = { showManualDialog = false },
                 onConfirm = { name, sid, unit, status ->
+                    // 🔥 FIXED: Sekarang menyertakan schoolId dari authState
                     val newRecord = CheckInRecord(
                         studentId = sid,
                         name = name,
+                        schoolId = authState.schoolId, // Parameter krusial yang tadinya hilang
                         timestamp = LocalDateTime.now(),
                         status = status,
                         verified = true,
@@ -183,13 +180,16 @@ fun CheckInRecordScreen(
                         role = unit.roleName ?: "STUDENT",
                         syncStatus = "PENDING"
                     )
-                    checkInVM.saveCheckIn(newRecord)
+                    
+                    checkInVM.saveCheckIn(newRecord, 0.0f) 
+                    
                     showManualDialog = false
                     Toast.makeText(context, "Berhasil simpan log manual", Toast.LENGTH_SHORT).show()
                 }
             )
         }
 
+        // Edit Status & Delete Dialog (Tetap sama)
         recordToEdit?.let { record ->
             EditStatusDialog(
                 currentStatus = record.status,
@@ -205,7 +205,7 @@ fun CheckInRecordScreen(
             AlertDialog(
                 onDismissRequest = { recordToDelete = null },
                 title = { Text("Konfirmasi Hapus") },
-                text = { Text("Apakah Anda yakin ingin menghapus log ${record.name}? Data di Cloud juga akan terhapus.") },
+                text = { Text("Apakah Anda yakin ingin menghapus log ${record.name}?") },
                 confirmButton = {
                     Button(
                         onClick = {
@@ -224,6 +224,7 @@ fun CheckInRecordScreen(
     }
 }
 
+// ... ManualCheckInDialog dan EditStatusDialog tetap sama seperti sebelumnya ...
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ManualCheckInDialog(

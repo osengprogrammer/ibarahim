@@ -4,6 +4,7 @@ import android.Manifest
 import android.graphics.Bitmap
 import android.graphics.Rect
 import android.util.Log
+import android.util.Size // 🚀 Diperlukan untuk setTargetResolution
 import androidx.camera.core.*
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
@@ -48,9 +49,8 @@ import kotlinx.coroutines.launch
 import java.util.concurrent.Executors
 
 /**
- * 📸 FaceCaptureScreen V.15.6
- * Solusi: Menghapus parameter 'enabled' yang tidak terdefinisi di AzuraButton
- * dan menggantinya dengan manual guard logic di onClick.
+ * 📸 FaceCaptureScreen V.18.0 - Eagle Eye Registration
+ * Update: Sinkronisasi resolusi 720p & perbaikan 'Unresolved reference close'.
  */
 @OptIn(ExperimentalPermissionsApi::class)
 @Composable
@@ -80,10 +80,17 @@ fun FaceCaptureScreen(
 
     val flashAlpha = remember { Animatable(0f) }
     val checkmarkScale = remember { Animatable(0.5f) }
-    val imageCapture = remember { ImageCapture.Builder().build() }
+    
+    // 🚀 ImageCapture juga kita set agar hasilnya tajam
+    val imageCapture = remember { 
+        ImageCapture.Builder()
+            .setTargetResolution(Size(720, 1280))
+            .build() 
+    }
+    
     var useFrontCamera by remember { mutableStateOf(true) }
 
-    // ✅ Integrasi FaceAnalyzer (V.15.0 - Normalization & Square Crop Ready)
+    // ✅ Integrasi FaceAnalyzer (Sekarang sudah punya fungsi close() di dalamnya)
     val analyzer = remember {
         FaceAnalyzer { result ->
             androidx.compose.runtime.snapshots.Snapshot.withMutableSnapshot {
@@ -95,10 +102,11 @@ fun FaceCaptureScreen(
         }
     }
 
+    // ✅ PEMBERSIHAN (Mencegah Memory Leak)
     DisposableEffect(Unit) {
         onDispose {
             executor.shutdown()
-            analyzer.close()
+            analyzer.close() // Sekarang sudah aman karena FaceAnalyzer.kt sudah kita perbaiki
         }
     }
 
@@ -121,10 +129,16 @@ fun FaceCaptureScreen(
             LaunchedEffect(cameraPermissionState.status.isGranted, useFrontCamera) {
                 if (cameraPermissionState.status.isGranted) {
                     val cameraProvider = ProcessCameraProvider.getInstance(context).get()
-                    val preview = Preview.Builder().build().also {
-                        it.setSurfaceProvider(previewView.surfaceProvider)
-                    }
+                    
+                    // 🚀 EAGLE EYE RESOLUTION: Sinkronisasi 720p dengan Scanner
+                    val preview = Preview.Builder()
+                        .setTargetResolution(Size(720, 1280))
+                        .build().also {
+                            it.setSurfaceProvider(previewView.surfaceProvider)
+                        }
+                        
                     val analysis = ImageAnalysis.Builder()
+                        .setTargetResolution(Size(720, 1280))
                         .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                         .build().also {
                             it.setAnalyzer(executor, analyzer)
@@ -137,7 +151,7 @@ fun FaceCaptureScreen(
                         cameraProvider.unbindAll()
                         cameraProvider.bindToLifecycle(lifecycleOwner, selector, preview, analysis, imageCapture)
                     } catch (e: Exception) {
-                        Log.e("FaceCapture", "Binding failed", e)
+                        Log.e("FaceCapture", "Eagle Eye Binding failed", e)
                     }
                 }
             }
@@ -170,7 +184,7 @@ fun FaceCaptureScreen(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.Center
             ) {
-                val statusText = if (faceBounds.isEmpty()) "MENCARI WAJAH..." else "SIAP DAFTAR"
+                val statusText = if (faceBounds.isEmpty()) "MENCARI WAJAH..." else "WAJAH TERDETEKSI"
                 val statusColor = if (faceBounds.isEmpty()) Color.Yellow else AzuraSuccess
                 
                 Box(Modifier.size(8.dp).background(statusColor, CircleShape))
@@ -205,11 +219,14 @@ fun FaceCaptureScreen(
                             }
                         }
                         Spacer(Modifier.height(24.dp))
-                        Text("DATA TERSIMPAN", style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Black, color = Color.White))
+                        Text(
+                            text = if (mode == CaptureMode.EMBEDDING) "BIOMETRIK TERSIMPAN" else "FOTO TERSIMPAN", 
+                            style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Black, color = Color.White)
+                        )
                     } else {
                         CircularProgressIndicator(color = AzuraAccent, strokeWidth = 6.dp)
                         Spacer(Modifier.height(16.dp))
-                        Text("SEDANG MEMPROSES...", color = Color.White)
+                        Text("MENGEKSTRAK FITUR...", color = Color.White)
                     }
                 }
             }
@@ -231,11 +248,9 @@ fun FaceCaptureScreen(
                 Text("Batal")
             }
 
-            // 🔥 AZURA BUTTON TANPA PARAMETER 'ENABLED' (Guard Logic di onClick)
             AzuraButton(
-                text = if (mode == CaptureMode.EMBEDDING) "Daftarkan Biometrik" else "Ambil Foto Profil",
+                text = if (mode == CaptureMode.EMBEDDING) "Daftarkan" else "Ambil Foto",
                 onClick = {
-                    // 🛡️ Manual Guard: Jangan proses jika sedang loading atau wajah tidak ditemukan (untuk mode embedding)
                     if (isProcessing) return@AzuraButton
                     if (mode == CaptureMode.EMBEDDING && faceBounds.isEmpty()) return@AzuraButton
 
@@ -272,6 +287,7 @@ fun FaceCaptureScreen(
                                             }
                                         }
                                         override fun onError(exc: ImageCaptureException) { 
+                                            Log.e("FaceCapture", "Capture failed", exc)
                                             isProcessing = false
                                             showCaptureFeedback = false 
                                         }
